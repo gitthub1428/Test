@@ -1,707 +1,451 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Smart Document Scanner</title>
-  
-  <style>
-    :root {
-      --bg-dark: #090a0f;
-      --surface-glass: rgba(18, 22, 34, 0.75);
-      --border-glass: rgba(255, 255, 255, 0.12);
-      --accent-cyan: #00f2fe;
-      --accent-blue: #4facfe;
-      --accent-green: #00e676;
-      --accent-amber: #ffab00;
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      user-select: none;
-      -webkit-user-select: none;
-      -webkit-tap-highlight-color: transparent;
-    }
-
-    body, html {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background-color: var(--bg-dark);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      color: var(--text-main);
-    }
-
-    #app-container {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-    }
-
-    .view-layer {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      transition: opacity 0.35s ease, visibility 0.35s ease;
-    }
-
-    .view-hidden {
-      opacity: 0;
-      visibility: hidden;
-      pointer-events: none;
-    }
-
-    .view-active {
-      opacity: 1;
-      visibility: visible;
-      pointer-events: auto;
-    }
-
-    #start-view {
-      background: radial-gradient(circle at 50% 30%, #1e293b 0%, #090a0f 100%);
-      padding: 24px;
-      text-align: center;
-      z-index: 50;
-    }
-
-    .hero-badge {
-      width: 80px;
-      height: 80px;
-      border-radius: 24px;
-      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-bottom: 24px;
-      box-shadow: 0 12px 32px rgba(0, 242, 254, 0.3);
-    }
-
-    .hero-badge svg {
-      width: 44px;
-      height: 44px;
-      stroke: #fff;
-    }
-
-    .hero-title {
-      font-size: 26px;
-      font-weight: 700;
-      letter-spacing: -0.5px;
-      margin-bottom: 8px;
-    }
-
-    .hero-desc {
-      font-size: 15px;
-      color: var(--text-muted);
-      max-width: 320px;
-      line-height: 1.5;
-      margin-bottom: 32px;
-    }
-
-    .btn-primary {
-      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
-      color: #001220;
-      font-weight: 600;
-      font-size: 16px;
-      border: none;
-      padding: 16px 36px;
-      border-radius: 30px;
-      cursor: pointer;
-      box-shadow: 0 8px 24px rgba(79, 172, 254, 0.35);
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      transition: transform 0.15s ease;
-    }
-
-    .btn-primary:active {
-      transform: scale(0.96);
-    }
-
-    #scanner-view {
-      background: #000;
-      z-index: 10;
-    }
-
-    #video-feed {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-
-    #overlay-canvas {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      z-index: 12;
-    }
-
-    .scanner-ui {
-      position: absolute;
-      inset: 0;
-      z-index: 15;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: env(safe-area-inset-top, 20px) 16px env(safe-area-inset-bottom, 24px) 16px;
-      pointer-events: none;
-    }
-
-    .interactive {
-      pointer-events: auto;
-    }
-
-    .top-bar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      width: 100%;
-      padding-top: 8px;
-    }
-
-    .glass-btn {
-      width: 44px;
-      height: 44px;
-      border-radius: 50%;
-      background: var(--surface-glass);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid var(--border-glass);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #fff;
-      cursor: pointer;
-      transition: background 0.2s, transform 0.1s;
-    }
-
-    .glass-btn:active {
-      transform: scale(0.92);
-      background: rgba(255, 255, 255, 0.25);
-    }
-
-    .glass-btn.btn-disabled {
-      opacity: 0.3;
-      pointer-events: none;
-    }
-
-    .status-hud {
-      margin-top: 14px;
-      align-self: center;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 6px;
-      max-width: 88%;
-    }
-
-    .status-pill {
-      background: var(--surface-glass);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid var(--border-glass);
-      padding: 8px 18px;
-      border-radius: 20px;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      text-align: center;
-    }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--text-muted);
-    }
-
-    .progress-bar-container {
-      width: 120px;
-      height: 3px;
-      background: rgba(255, 255, 255, 0.15);
-      border-radius: 2px;
-      overflow: hidden;
-      opacity: 0;
-      transition: opacity 0.2s ease;
-    }
-
-    .progress-bar-fill {
-      width: 0%;
-      height: 100%;
-      background: var(--accent-green);
-      transition: width 0.05s linear;
-    }
-
-    .bottom-bar {
-      display: flex;
-      justify-content: space-around;
-      align-items: center;
-      width: 100%;
-      padding-bottom: 12px;
-    }
-
-    .shutter-btn {
-      width: 76px;
-      height: 76px;
-      border-radius: 50%;
-      background: transparent;
-      border: 4px solid #fff;
-      padding: 5px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-    }
-
-    .shutter-btn-inner {
-      width: 100%;
-      height: 100%;
-      background: #fff;
-      border-radius: 50%;
-      transition: transform 0.1s ease;
-    }
-
-    .shutter-btn:active .shutter-btn-inner {
-      transform: scale(0.9);
-      background: #e2e8f0;
-    }
-
-    #capture-flash {
-      position: absolute;
-      inset: 0;
-      background: white;
-      opacity: 0;
-      pointer-events: none;
-      z-index: 40;
-      transition: opacity 0.1s cubic-bezier(0.1, 0.9, 0.2, 1);
-    }
-
-    #preview-view {
-      background: var(--bg-dark);
-      z-index: 30;
-      padding: 20px;
-      justify-content: space-between;
-    }
-
-    .preview-canvas-wrapper {
-      flex: 1;
-      width: 100%;
-      max-height: 75vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 12px 0;
-    }
-
-    #preview-canvas {
-      max-width: 100%;
-      max-height: 100%;
-      border-radius: 12px;
-      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
-      border: 1px solid var(--border-glass);
-      object-fit: contain;
-    }
-
-    .preview-actions {
-      width: 100%;
-      display: flex;
-      gap: 12px;
-      padding-bottom: env(safe-area-inset-bottom, 12px);
-    }
-
-    .btn-secondary {
-      flex: 1;
-      background: var(--surface-glass);
-      border: 1px solid var(--border-glass);
-      color: var(--text-main);
-      padding: 16px;
-      border-radius: 16px;
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-    }
-
-    .btn-action-accent {
-      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
-      color: #001220;
-      border: none;
-    }
-
-    #toast-msg {
-      position: absolute;
-      top: 24px;
-      background: rgba(220, 38, 38, 0.95);
-      color: white;
-      padding: 12px 20px;
-      border-radius: 16px;
-      font-size: 13.5px;
-      font-weight: 500;
-      z-index: 100;
-      opacity: 0;
-      transform: translateY(-10px);
-      transition: opacity 0.3s, transform 0.3s;
-      pointer-events: none;
-      max-width: 90%;
-      text-align: center;
-      line-height: 1.4;
-    }
-
-    #toast-msg.show {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Smart Document Scanner</title>
+<style>
+:root{--bg:#050505;--fg:#fff;--muted:#b9b9b9;--glass:rgba(20,20,20,.72);--line:#fff}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;color:var(--fg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+#app{position:fixed;inset:0;background:#000}
+#video{position:absolute;width:100%;height:100%;object-fit:cover;background:#000}
+#analysis{display:none}
+#overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.top{position:absolute;top:max(18px,env(safe-area-inset-top));left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:14px 16px;z-index:5}
+.pill{padding:9px 13px;border-radius:999px;background:var(--glass);backdrop-filter:blur(16px);font-size:13px;font-weight:650;box-shadow:0 6px 30px #0008}
+.icon{width:42px;height:42px;border:0;border-radius:50%;background:var(--glass);color:#fff;font-size:18px;backdrop-filter:blur(16px)}
+.bottom{position:absolute;left:0;right:0;bottom:max(22px,env(safe-area-inset-bottom));z-index:6;padding:15px 20px}
+.status{text-align:center;min-height:46px;margin-bottom:12px}
+#message{font-size:16px;font-weight:700;text-shadow:0 2px 12px #000}
+#sub{font-size:12px;color:#ddd;margin-top:4px}
+.controls{display:flex;align-items:center;justify-content:center;gap:24px}
+.capture{width:76px;height:76px;border-radius:50%;border:4px solid #fff;background:#fff8;box-shadow:0 0 0 7px #0006}
+.capture:active{transform:scale(.94)}
+.small{width:48px;height:48px;border-radius:50%;border:0;background:var(--glass);color:#fff;font-size:19px;backdrop-filter:blur(15px)}
+#start,#result{position:absolute;inset:0;z-index:20;background:radial-gradient(circle at 50% 30%,#222,#030303 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px;text-align:center}
+#result{display:none;z-index:30}
+.card{width:min(440px,92vw);display:flex;flex-direction:column;align-items:center;gap:15px}
+.logo{width:76px;height:76px;border-radius:24px;background:#fff;color:#111;display:grid;place-items:center;font-size:35px;box-shadow:0 20px 60px #000}
+h1{font-size:28px;margin:4px 0 0;letter-spacing:-.8px}
+p{color:var(--muted);line-height:1.5;margin:0 0 10px}
+.primary{width:100%;border:0;border-radius:18px;padding:16px;background:#fff;color:#000;font-weight:800;font-size:16px}
+.secondary{width:100%;border:1px solid #ffffff33;border-radius:18px;padding:15px;background:#ffffff0d;color:#fff;font-weight:700;font-size:15px}
+#resultImg{max-width:94vw;max-height:67vh;border-radius:12px;box-shadow:0 20px 70px #000}
+.hidden{display:none!important}
+.flash{animation:flash .25s ease}
+@keyframes flash{0%{opacity:1}50%{opacity:.15}100%{opacity:1}}
+@media (orientation:landscape){.bottom{padding-bottom:15px}.status{margin-bottom:5px}}
+</style>
 </head>
 <body>
+<div id="app">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="analysis"></canvas>
+  <canvas id="overlay"></canvas>
 
-<div id="app-container">
-  <div id="toast-msg"></div>
-  <div id="capture-flash"></div>
-
-  <!-- VIEW 1: START SCREEN -->
-  <div id="start-view" class="view-layer view-active">
-    <div class="hero-badge">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
-      </svg>
-    </div>
-    <h1 class="hero-title">Smart Scanner</h1>
-    <p class="hero-desc">Point your camera at documents, receipts, or notes to scan with live border tracking.</p>
-    <button id="btn-start" class="btn-primary">
-      <span>Start Scanning</span>
-    </button>
+  <div class="top">
+    <button class="icon" id="exitBtn" aria-label="Exit">×</button>
+    <div class="pill" id="state">Ready</div>
+    <button class="icon" id="torchBtn" aria-label="Torch">⌁</button>
   </div>
 
-  <!-- VIEW 2: CAMERA SCREEN -->
-  <div id="scanner-view" class="view-layer view-hidden">
-    <video id="video-feed" playsinline muted autoplay></video>
-    <canvas id="overlay-canvas"></canvas>
-
-    <div class="scanner-ui">
-      <div class="top-bar">
-        <button id="btn-exit" class="glass-btn interactive" title="Exit">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-        </button>
-
-        <div class="status-hud">
-          <div id="status-pill" class="status-pill">
-            <span id="status-dot" class="status-dot"></span>
-            <span id="status-text">Find a document</span>
-          </div>
-          <div id="progress-container" class="progress-bar-container">
-            <div id="progress-fill" class="progress-bar-fill"></div>
-          </div>
-        </div>
-
-        <button id="btn-torch" class="glass-btn interactive" title="Flashlight">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-        </button>
-      </div>
-
-      <div class="bottom-bar">
-        <button id="btn-switch-cam" class="glass-btn interactive" title="Switch Camera">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16v5h-5M4 8V3h5m11 0l-6 6M4 21l6-6"/></svg>
-        </button>
-
-        <button id="btn-manual-capture" class="shutter-btn interactive" title="Capture">
-          <div class="shutter-btn-inner"></div>
-        </button>
-
-        <div style="width: 44px; height: 44px;"></div>
-      </div>
+  <div class="bottom">
+    <div class="status">
+      <div id="message">Find a document</div>
+      <div id="sub">Place the whole page inside the camera</div>
+    </div>
+    <div class="controls">
+      <button class="small" id="switchBtn" aria-label="Switch camera">↻</button>
+      <button class="capture" id="captureBtn" aria-label="Capture"></button>
+      <button class="small" id="resetBtn" aria-label="Reset">↺</button>
     </div>
   </div>
 
-  <!-- VIEW 3: PREVIEW SCREEN -->
-  <div id="preview-view" class="view-layer view-hidden">
-    <div class="preview-canvas-wrapper">
-      <canvas id="preview-canvas"></canvas>
+  <section id="start">
+    <div class="card">
+      <div class="logo">▣</div>
+      <h1>Smart Scanner</h1>
+      <p>Point your camera at a document. The scanner detects its corners, checks image quality and captures automatically when everything is ready.</p>
+      <div style="font-size:12px;color:#aaa;margin:-4px 0 4px">Camera permission is requested when you tap Start Scanning.</div>
+      <button class="primary" id="startBtn">Start Scanning</button>
     </div>
-    <div class="preview-actions">
-      <button id="btn-retake" class="btn-secondary">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
-        Retake
-      </button>
-      <button id="btn-use-photo" class="btn-secondary btn-action-accent">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-        Use Photo
-      </button>
+  </section>
+
+  <section id="result">
+    <div class="card">
+      <div class="pill">Captured</div>
+      <img id="resultImg" alt="Captured document">
+      <button class="primary" id="useBtn">Use Photo</button>
+      <button class="secondary" id="retakeBtn">Retake</button>
     </div>
-  </div>
+  </section>
 </div>
 
-<canvas id="analysis-canvas" style="display: none;"></canvas>
-<canvas id="capture-canvas" style="display: none;"></canvas>
-
-<!-- OpenCV Runtime Hook -->
+<!-- OpenCV is loaded only for computer vision. The application itself is one HTML file. -->
+<script src="https://docs.opencv.org/4.x/opencv.js"></script>
 <script>
-  let isOpenCvReady = false;
-  var Module = {
-    onRuntimeInitialized: function() {
-      isOpenCvReady = true;
-    }
-  };
-</script>
-<script async src="https://docs.opencv.org/4.8.0/opencv.js"></script>
+"use strict";
 
-<script>
-const CAMERA_FPS_LIMIT = 15;
-const MIN_DOCUMENT_AREA = 0.15;
-const MAX_DOCUMENT_AREA = 0.92;
-const CENTER_TOLERANCE = 0.15;
-const MAX_PERSPECTIVE = 0.30;
-const MIN_CONFIDENCE = 85;
-const HYSTERESIS_CONFIDENCE = 78;
-const STABILITY_THRESHOLD = 0.005;
-const STABILITY_FRAMES = 8;
-const AUTO_CAPTURE_DELAY = 750;
-const GLARE_THRESHOLD = 0.20;
-const LOW_LIGHT_THRESHOLD = 45;
-const OVEREXPOSURE_THRESHOLD = 225;
-const ANALYSIS_TARGET_WIDTH = 480;
-
-let cameraStream = null;
-let videoTrack = null;
-let currentCameraIndex = 0;
-let availableCameras = [];
-let isDetecting = false;
-let captureInProgress = false;
-let timerStartTime = null;
-
-let previousCorners = null;
-let trackingLostCounter = 0;
-let consecutiveStableFrames = 0;
-let recentDetectionHistory = [];
-let rollingSharpnessWindow = [];
-let recentFramesBuffer = [];
-let animatedCorners = null;
-
-const STATES = {
-  SEARCHING: 'SEARCHING',
-  DETECTED: 'DETECTED',
-  POSITIONING: 'POSITIONING',
-  STABILIZING: 'STABILIZING',
-  READY: 'READY',
-  CAPTURING: 'CAPTURING'
+/* =========================
+   CENTRALIZED TUNING VALUES
+   ========================= */
+const CFG = {
+  targetWidth: 1920,
+  targetHeight: 1080,
+  detectFPS: 12,
+  minAreaRatio: .15,
+  maxAreaRatio: .92,
+  preferredMinArea: .25,
+  preferredMaxArea: .85,
+  cannyLow: 50,
+  cannyHigh: 150,
+  blurKernel: 5,
+  approxEpsilon: .02,
+  minAngle: 20,
+  maxAngle: 160,
+  centerTolerance: .15,
+  maxPerspective: .30,
+  minConfidence: 85,
+  readyDropConfidence: 78,
+  stableMovement: .005,
+  movingMovement: .015,
+  requiredStableFrames: 8,
+  temporalValidNeeded: 5,
+  temporalWindow: 8,
+  autoCaptureMs: 750,
+  captureLockMs: 1500,
+  lostFrames: 3,
+  glareWarn: .12,
+  glareReject: .20,
+  lowLight: 45,
+  highLight: 225,
+  clippingRatio: .08,
+  sharpRelativeMin: .55,
+  sharpExcellent: .80,
+  edgeSupportMin: .70,
+  frameKeep: 5,
+  duplicateResetMs: 1500
 };
-let currentState = STATES.SEARCHING;
 
-const startView = document.getElementById('start-view');
-const scannerView = document.getElementById('scanner-view');
-const previewView = document.getElementById('preview-view');
-const videoFeed = document.getElementById('video-feed');
-const overlayCanvas = document.getElementById('overlay-canvas');
-const overlayCtx = overlayCanvas.getContext('2d');
-const analysisCanvas = document.getElementById('analysis-canvas');
-const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
-const captureCanvas = document.getElementById('capture-canvas');
-const captureCtx = captureCanvas.getContext('2d', { willReadFrequently: true });
-const previewCanvas = document.getElementById('preview-canvas');
-const previewCtx = previewCanvas.getContext('2d');
-const statusPill = document.getElementById('status-pill');
-const statusDot = document.getElementById('status-dot');
-const statusText = document.getElementById('status-text');
-const progressContainer = document.getElementById('progress-container');
-const progressFill = document.getElementById('progress-fill');
-const captureFlash = document.getElementById('capture-flash');
-const toastMsg = document.getElementById('toast-msg');
-const btnTorch = document.getElementById('btn-torch');
-const btnSwitchCam = document.getElementById('btn-switch-cam');
-const btnStart = document.getElementById('btn-start');
+const video = document.getElementById("video");
+const analysis = document.getElementById("analysis");
+const overlay = document.getElementById("overlay");
+const actx = analysis.getContext("2d", {willReadFrequently:true});
+const octx = overlay.getContext("2d");
+const start = document.getElementById("start");
+const result = document.getElementById("result");
+const resultImg = document.getElementById("resultImg");
+const message = document.getElementById("message");
+const sub = document.getElementById("sub");
+const stateEl = document.getElementById("state");
+const torchBtn = document.getElementById("torchBtn");
 
-function showToast(msg) {
-  toastMsg.textContent = msg;
-  toastMsg.classList.add('show');
-  setTimeout(() => toastMsg.classList.remove('show'), 4500);
+let stream=null, track=null, facing="environment", torch=false;
+let running=false, processing=false, captureInProgress=false;
+let raf=0, lastDetect=0, stableCount=0, invalidCount=0, readySince=0;
+let lastQuad=null, bestFrames=[], rollingSharp=[];
+let capturedCanvas=null, cvReady=false, cvFailed=false;
+
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+function setStatus(s,m,detail=""){ stateEl.textContent=s; message.textContent=m; sub.textContent=detail; }
+function resizeOverlay(){ overlay.width=innerWidth*devicePixelRatio; overlay.height=innerHeight*devicePixelRatio; overlay.style.width=innerWidth+"px";overlay.style.height=innerHeight+"px";octx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0); }
+addEventListener("resize",resizeOverlay); resizeOverlay();
+
+if(window.cv){
+  cv["onRuntimeInitialized"]=()=>{cvReady=true;};
+}
+function cameraError(e){
+  let text="Camera could not be started.";
+  if(e && e.name==="NotAllowedError") text="Camera permission was denied.";
+  else if(e && e.name==="NotFoundError") text="No camera was found.";
+  setStatus("Camera error",text,"Check browser permissions and try again.");
 }
 
-function triggerHaptic() {
-  if (navigator.vibrate) {
-    try { navigator.vibrate(50); } catch(e){}
+async function startCamera(){
+  const secure = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+  if(!secure){
+    setStatus("Camera blocked","Secure connection required","Open this page through HTTPS or localhost");
+    alert("Camera access requires HTTPS or localhost. Opening an HTML file directly as file:// may prevent Android from showing the permission prompt.");
+    return;
   }
-}
-
-/**
- * DIRECT PERMISSION & CAMERA INITIALIZATION
- * Directly invoked inside the user touch event to ensure the browser prompt pops up.
- */
-async function requestCameraAccess(deviceId = null) {
-  // 1. Insecure context validation
-  if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    showToast("Camera blocked: Mobile browsers require HTTPS to trigger permission. Please use HTTPS.");
+  if(!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia!=="function"){
+    setStatus("Unsupported","Camera API unavailable","Use a recent Chrome/Android browser");
     return;
   }
 
-  // 2. MediaDevices API support check
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showToast("Your browser does not support standard camera access.");
-    return;
-  }
-
-  if (cameraStream) {
+  try{
     stopCamera();
-  }
+    resetDetection();
 
-  // Minimum required constraints to guarantee permission prompt fires without parameter errors
-  const standardConstraints = {
-    audio: false,
-    video: deviceId 
-      ? { deviceId: { exact: deviceId } } 
-      : { 
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 }
-        }
-  };
+    // First request permission explicitly with the rear camera.
+    // Do not rely on enumerateDevices labels before permission is granted.
+    const constraints={
+      audio:false,
+      video:{
+        facingMode:{ideal:"environment"},
+        width:{ideal:CFG.targetWidth},
+        height:{ideal:CFG.targetHeight},
+        frameRate:{ideal:30,max:60}
+      }
+    };
 
-  const simpleFallbackConstraints = {
-    audio: false,
-    video: { facingMode: "environment" }
-  };
+    setStatus("CAMERA","Requesting camera…","Allow camera access when Android asks");
+    stream=await navigator.mediaDevices.getUserMedia(constraints);
 
-  try {
-    try {
-      // This line triggers the native permission prompt
-      cameraStream = await navigator.mediaDevices.getUserMedia(standardConstraints);
-    } catch (e) {
-      // If hardware rejects complex dimensions, retry simple stream
-      cameraStream = await navigator.mediaDevices.getUserMedia(simpleFallbackConstraints);
+    video.srcObject=stream;
+
+    // Wait for metadata before starting analysis.
+    await new Promise((resolve,reject)=>{
+      if(video.readyState>=1 && video.videoWidth>0){resolve();return;}
+      const timer=setTimeout(()=>reject(new Error("Camera metadata timeout")),8000);
+      video.onloadedmetadata=()=>{
+        clearTimeout(timer);
+        if(video.videoWidth>0)resolve();
+        else reject(new Error("Camera returned no video dimensions"));
+      };
+    });
+
+    await video.play();
+
+    track=stream.getVideoTracks()[0];
+    if(!track){
+      throw new Error("No video track returned");
     }
 
-    videoFeed.srcObject = cameraStream;
-    
-    // Explicit play invocation
-    await videoFeed.play();
+    // Read actual camera capabilities/settings after permission.
+    try{
+      const settings=track.getSettings ? track.getSettings() : {};
+      console.info("Camera settings:",settings);
+    }catch(e){}
 
-    videoTrack = cameraStream.getVideoTracks()[0];
-    await getCameras();
-    checkTorchSupport();
+    const caps=track.getCapabilities ? track.getCapabilities() : {};
+    if(caps.torch){
+      torchBtn.classList.remove("hidden");
+      torchBtn.textContent="⌁";
+    }else{
+      torchBtn.classList.add("hidden");
+    }
 
-    resizeOverlay();
-    window.addEventListener('resize', resizeOverlay);
+    // If supported, improve camera behavior without making startup fail.
+    try{
+      const advanced={};
+      if(caps.focusMode && caps.focusMode.includes("continuous")) advanced.focusMode="continuous";
+      if(caps.exposureMode && caps.exposureMode.includes("continuous")) advanced.exposureMode="continuous";
+      if(caps.whiteBalanceMode && caps.whiteBalanceMode.includes("continuous")) advanced.whiteBalanceMode="continuous";
+      if(Object.keys(advanced).length) await track.applyConstraints({advanced:[advanced]});
+    }catch(e){
+      console.info("Optional camera constraints unavailable:",e);
+    }
 
-    // Switch Views
-    startView.className = 'view-layer view-hidden';
-    previewView.className = 'view-layer view-hidden';
-    scannerView.className = 'view-layer view-active';
+    running=true;
+    start.classList.add("hidden");
+    result.style.display="none";
+    setStatus("SCANNING","Find a document","Place the whole page inside the camera");
+    requestAnimationFrame(loop);
 
-    captureInProgress = false;
-    isDetecting = true;
-    requestAnimationFrame(detectionLoop);
+  }catch(e){
+    console.error("Camera startup error:",e);
+    stopCamera();
 
-  } catch (err) {
-    console.error("Camera Error:", err);
-    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-      showToast("Camera permission denied. Tap the lock icon in the browser address bar to allow camera access.");
-    } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-      showToast("No camera detected on this device.");
-    } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-      showToast("Camera is currently in use by another application.");
-    } else {
-      showToast("Could not start camera: " + (err.message || "Unknown error"));
+    if(e.name==="NotAllowedError" || e.name==="PermissionDeniedError"){
+      setStatus("PERMISSION","Camera permission denied","Allow Camera in Android/browser settings, then try again");
+    }else if(e.name==="NotFoundError" || e.name==="DevicesNotFoundError"){
+      setStatus("NO CAMERA","No camera found","Check that your device camera is available");
+    }else if(e.name==="NotReadableError" || e.name==="TrackStartError"){
+      setStatus("CAMERA BUSY","Camera is unavailable","Close other apps using the camera and try again");
+    }else if(e.name==="OverconstrainedError"){
+      // Retry once with minimal constraints if the preferred camera settings fail.
+      try{
+        stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:"environment"}});
+        video.srcObject=stream;
+        await video.play();
+        track=stream.getVideoTracks()[0];
+        running=true;
+        start.classList.add("hidden");
+        setStatus("SCANNING","Find a document","Camera started with compatible settings");
+        requestAnimationFrame(loop);
+      }catch(e2){
+        console.error("Fallback camera error:",e2);
+        setStatus("CAMERA ERROR","Camera settings unsupported","Try another browser or camera app");
+      }
+    }else if(e.name==="SecurityError"){
+      setStatus("SECURITY","Camera access blocked","Use HTTPS or localhost");
+    }else{
+      setStatus("CAMERA ERROR","Could not start camera","Check browser permissions and try again");
     }
   }
 }
-
-function stopCamera() {
-  isDetecting = false;
-  window.removeEventListener('resize', resizeOverlay);
-  if (cameraStream) {
-    cameraStream.getTracks().forEach(track => track.stop());
-    cameraStream = null;
-    videoTrack = null;
+function stopCamera(){
+  running=false; if(raf)cancelAnimationFrame(raf); raf=0;
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;track=null;}
+}
+async function toggleTorch(){
+  if(!track || !track.getCapabilities)return;
+  const caps=track.getCapabilities();
+  if(!caps.torch)return;
+  torch=!torch;
+  try{await track.applyConstraints({advanced:[{torch}]});torchBtn.textContent=torch?"●":"⌁";}
+  catch(e){torch=false;}
+}
+async function switchCamera(){
+  if(!running)return;
+  facing=facing==="environment"?"user":"environment";
+  torch=false;
+  await startCamera();
+}
+function clearOverlay(){octx.clearRect(0,0,innerWidth,innerHeight);}
+function videoPointToScreen(p){
+  const vw=video.videoWidth, vh=video.videoHeight;
+  if(!vw||!vh)return {x:0,y:0};
+  const scale=Math.max(innerWidth/vw,innerHeight/vh);
+  const dw=vw*scale, dh=vh*scale;
+  const ox=(innerWidth-dw)/2, oy=(innerHeight-dh)/2;
+  return {x:p.x*scale+ox,y:p.y*scale+oy};
+}
+function drawQuad(q,confidence){
+  clearOverlay(); if(!q)return;
+  const pts=q.map(videoPointToScreen);
+  octx.save();
+  octx.lineJoin="round"; octx.lineCap="round";
+  octx.beginPath();octx.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<4;i++)octx.lineTo(pts[i].x,pts[i].y);
+  octx.closePath();
+  octx.fillStyle="rgba(255,255,255,.06)";octx.fill();
+  octx.strokeStyle="#fff";octx.lineWidth=3;octx.stroke();
+  pts.forEach((p,i)=>{
+    octx.beginPath();octx.arc(p.x,p.y,9,0,Math.PI*2);
+    octx.fillStyle="#fff";octx.fill();
+    octx.beginPath();octx.arc(p.x,p.y,15,0,Math.PI*2);
+    octx.strokeStyle="rgba(255,255,255,.5)";octx.lineWidth=2;octx.stroke();
+  });
+  if(confidence>=CFG.minConfidence){
+    const cx=pts.reduce((a,p)=>a+p.x,0)/4, cy=pts.reduce((a,p)=>a+p.y,0)/4;
+    octx.beginPath();octx.arc(cx,cy,22,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.min(1,(confidence-85)/15));
+    octx.strokeStyle="#fff";octx.lineWidth=3;octx.stroke();
   }
+  octx.restore();
 }
-
-async function getCameras() {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    availableCameras = devices.filter(d => d.kind === 'videoinput');
-    btnSwitchCam.classList.toggle('btn-disabled', availableCameras.length <= 1);
-  } catch (err) {
-    btnSwitchCam.classList.add('btn-disabled');
+function orderPoints(pts){
+  const sums=pts.map(p=>p.x+p.y), diffs=pts.map(p=>p.x-p.y);
+  return [
+    pts[sums.indexOf(Math.min(...sums))],
+    pts[diffs.indexOf(Math.max(...diffs))],
+    pts[sums.indexOf(Math.max(...sums))],
+    pts[diffs.indexOf(Math.min(...diffs))]
+  ];
+}
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+function polygonArea(p){
+  let a=0; for(let i=0;i<4;i++){let j=(i+1)%4;a+=p[i].x*p[j].y-p[j].x*p[i].y;} return Math.abs(a)/2;
+}
+function angle(a,b,c){
+  const ab={x:a.x-b.x,y:a.y-b.y}, cb={x:c.x-b.x,y:c.y-b.y};
+  const dot=ab.x*cb.x+ab.y*cb.y, den=Math.hypot(ab.x,ab.y)*Math.hypot(cb.x,cb.y);
+  return Math.acos(Math.max(-1,Math.min(1,dot/(den||1))))*180/Math.PI;
+}
+function convexValid(q){
+  for(let i=0;i<4;i++){
+    const ang=angle(q[(i+3)%4],q[i],q[(i+1)%4]);
+    if(ang<CFG.minAngle||ang>CFG.maxAngle)return false;
   }
+  return true;
 }
-
-async function checkTorchSupport() {
-  if (!videoTrack) return;
-  try {
-    const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
-    btnTorch.classList.toggle('btn-disabled', !caps.torch);
-  } catch(e) {
-    btnTorch.classList.add('btn-disabled');
+function perspectiveScore(q){
+  const w1=dist(q[0],q[1]),w2=dist(q[3],q[2]);
+  const h1=dist(q[0],q[3]),h2=dist(q[1],q[2]);
+  const v=Math.max(Math.abs(w1-w2)/Math.max(w1,w2),Math.abs(h1-h2)/Math.max(h1,h2));
+  return Math.min(1,v);
+}
+function edgeSupport(gray, q, w,h){
+  let total=0, good=0;
+  const samples=45;
+  for(let e=0;e<4;e++){
+    const a=q[e],b=q[(e+1)%4];
+    for(let i=1;i<samples-1;i++){
+      const t=i/(samples-1),x=Math.round(a.x+(b.x-a.x)*t),y=Math.round(a.y+(b.y-a.y)*t);
+      total++;
+      let found=false;
+      for(let dy=-2;dy<=2&&!found;dy++)for(let dx=-2;dx<=2&&!found;dx++){
+        const xx=x+dx,yy=y+dy;
+        if(xx>=0&&yy>=0&&xx<w&&yy<h&&gray.ucharPtr(yy)[xx]>120)found=true;
+      }
+      if(found)good++;
+    }
   }
+  return total?good/total:0;
 }
-
-let torchActive = false;
-async function toggleTorch() {
-  if (!videoTrack) return;
-  try {
-    torchActive = !torchActive;
-    await videoTrack.applyConstraints({ advanced: [{ torch: torchActive }] });
-    btnTorch.style.color = torchActive ? 'var(--accent-amber)' : '#fff';
-  } catch (e) {
-    btnTorch.classList.add('btn-disabled');
+function frameMetrics(gray,q,w,h){
+  const mask=new cv.Mat.zeros(h,w,cv.CV_8UC1);
+  const poly=cv.matFromArray(4,1,cv.CV_32SC2,q.flatMap(p=>[Math.round(p.x),Math.round(p.y)]));
+  const pp=new cv.MatVector();pp.push_back(poly);cv.fillPoly(mask,pp,new cv.Scalar(255));
+  const mean=new cv.Mat(),sd=new cv.Mat();
+  cv.meanStdDev(gray,mean,sd,mask);
+  const brightness=mean.doubleAt(0,0);
+  const pixels=gray.data, m=mask.data; let near=0,count=0;
+  for(let i=0;i<m.length;i++)if(m[i]){count++;if(pixels[i]<10||pixels[i]>245)near++;}
+  const lap=new cv.Mat();cv.Laplacian(gray,lap,cv.CV_64F);
+  const lm=new cv.Mat(),ls=new cv.Mat();cv.meanStdDev(lap,lm,ls,mask);
+  const sharp=Math.pow(ls.doubleAt(0,0),2);
+  [mask,poly,pp,mean,sd,lap,lm,ls].forEach(x=>{try{x.delete()}catch(e){}});
+  return {brightness,clipping:count?near/count:0,sharp};
+}
+function confidenceFor(q,metrics,w,h,edge){
+  const area=polygonArea(q)/(w*h);
+  const areaScore=area>=CFG.minAreaRatio&&area<=CFG.maxAreaRatio?10:0;
+  const center={x:q.reduce((s,p)=>s+p.x,0)/4,y:q.reduce((s,p)=>s+p.y,0)/4};
+  const centered=Math.abs(center.x-w/2)/(w*.5)<=CFG.centerTolerance&&Math.abs(center.y-h/2)/(h*.5)<=CFG.centerTolerance;
+  const centerScore=centered?5:0;
+  const ps=perspectiveScore(q), perspectiveScorePts=ps<=CFG.maxPerspective?10:Math.max(0,10*(1-ps/.5));
+  const edgePts=Math.min(15,15*(edge/CFG.edgeSupportMin));
+  const brightOK=metrics.brightness>=CFG.lowLight&&metrics.brightness<=CFG.highLight;
+  const lightPts=brightOK?5:0;
+  const clipPenalty=metrics.clipping>CFG.clippingRatio?5:0;
+  return Math.max(0,Math.min(100,25+20+edgePts+areaScore+perspectiveScorePts+centerScore+lightPts-clipPenalty));
+}
+function detect(){
+  const vw=video.videoWidth,vh=video.videoHeight;if(!vw||!vh)return null;
+  const maxW=960, scale=Math.min(1,maxW/vw), w=Math.round(vw*scale),h=Math.round(vh*scale);
+  analysis.width=w;analysis.height=h;actx.drawImage(video,0,0,w,h);
+  if(!cvReady)return null;
+  let src=cv.imread(analysis),gray=new cv.Mat(),blur=new cv.Mat(),edges=new cv.Mat();
+  cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);cv.GaussianBlur(gray,blur,new cv.Size(CFG.blurKernel,CFG.blurKernel),0);
+  cv.Canny(blur,edges,CFG.cannyLow,CFG.cannyHigh);
+  let contours=new cv.MatVector(),hier=new cv.Mat();cv.findContours(edges,contours,hier,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+  let best=null,bestScore=-1;
+  for(let i=0;i<contours.size();i++){
+    const c=contours.get(i), peri=cv.arcLength(c,true), approx=new cv.Mat();
+    cv.approxPolyDP(c,approx,CFG.approxEpsilon*peri,true);
+    if(approx.rows===4&&cv.isContourConvex(approx)){
+      const pts=[];for(let j=0;j<4;j++)pts.push({x:approx.intAt(j,0),y:approx.intAt(j,1)});
+      const q=orderPoints(pts);
+      if(!convexValid(q)){approx.delete();c.delete();continue;}
+      const area=polygonArea(q)/(w*h);if(area<CFG.minAreaRatio||area>CFG.maxAreaRatio){approx.delete();c.delete();continue;}
+      const edge=edgeSupport(edges,q,w,h), metrics=frameMetrics(gray,q,w,h);
+      let score=confidenceFor(q,metrics,w,h,edge);
+      if(area>=CFG.preferredMinArea&&area<=CFG.preferredMaxArea)score+=2;
+      if(score>bestScore){bestScore=score;best={q:q.map(p=>({x:p.x/scale,y:p.y/scale})),score:Math.min(100,score),metrics,area,edge};}
+    }
+    approx.delete();c.delete();
   }
+  [src,gray,blur,edges,contours,hier].forEach(x=>{try{x.delete()}catch(e){}});
+  return best;
 }
-
-async function switchCamera() {
-  if (availableCameras.length < 2) return;
-  currentCameraIndex = (currentCameraIndex + 1) % availableCameras.length;
-  await requestCameraAccess(availableCameras[currentCameraIndex].deviceId);
+function movement(q){
+  if(!lastQuad)return 0;
+  const diag=Math.hypot(video.videoWidth,video.videoHeight);
+  return q.reduce((s,p,i)=>s+dist(p,lastQuad[i]),0)/4/diag;
 }
-
-function resizeOverlay() {
-  if (!videoFeed.videoWidth) return;
-  overlayCanvas.width = window.innerWidth;
-  overlayCanvas.height = window.innerHeight;
+function sharpRelative(v){
+  rollingSharp.push(v);if(rollingSharp.length>20)rollingSharp.shift();
+  const sorted=[...rollingSharp].sort((a,b)=>a-b);
+  const med=sorted[Math.floor(sorted.length/2)]||v;
+  return med? v/med:1;
 }
-
-function distance(p1, p2) {
-  return Math.hypot(p1.x - p2.x, p1.y - p2.y);
-}
-
-function orderPoints(pts) {
-  const sorted = [...pts].sort((a, b) => a.y - b.y);
-  const top = [sorted[0], sorted[1]].sort((a, b) => a.x - b.x);
-  const bottom = [sorted[2], sorted[3]].sort((a, b) => a.x - b.x);
-  return [top[0], top[1], bottom[1], bottom[0]];
-}
-
-function calculatePolygonArea(pts) {
-  let area = 0;
-  for (let i = 0; i < pts.length; i++) {
-    const j = (i + 1) % pts.length;
-    area += pts[i].x * pts[j].y;
-    area -= pts[j].x * pts[i].y;
-  }
-  return Math.abs(area) / 2;
-}
-
-function calculateInternalAngles(pts) {
-  const angles = [];
-  for (let i = 0; i < 4; i++) {
-    const p1 = pts[(i + 3) % 4];
-    const p2 = pts[i];
-    const p3 = pts[(i + 1) % 4];
-    const v1 = { x: p1.x - p2.x, y: p1.y - p2.y };
-    const v2 = { x: p3.x - p2.x, y: p3.y - p2.y };
-    const do
+function conditionMessage(d,move){
+  const w=video.videoWidth,h=video.videoHeight,q=d.q;
+  const cx=q.reduce((s,p)=>s+p.x,0)/4,cy=q.reduce((s,p)=>s+p.y,0)/4;
+  if(d.area<CFG.minAreaRatio)return["DETECTED","Move closer","Make the page larger in the frame"];
+  if(d.area>CFG.maxAreaRatio)return["DETECTED","Move farther away","Keep all four corners visible"];
+  if(Math.abs(cx-w/2)>.15*w||Math.abs(cy-h/2)>.15*h)return["POSITIONING","Center the document","Keep the page near the middle"];
+  if(perspectiveScore(q)>CFG.maxPerspective)return["POSITIONING","Reduce the angle","Point the came
