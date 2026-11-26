@@ -32,7 +32,7 @@ void (async function QuizPilotConsoleAI() {
   const CONFIG = {
     // Leave empty to be asked with a browser prompt, or set
     // window.QUIZPILOT_NVIDIA_KEY = 'nvapi-...' in the console before pasting.
-    NVIDIA_API_KEY: 'PASTE_YOUR_NVIDIA_KEY_HERE',   // <-- put your nvapi-... key between the quotes
+    NVIDIA_API_KEY: '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',   // <-- put your nvapi-... key between the quotes
 
     // OpenAI-compatible NVIDIA endpoint. If the console reports that the request
     // failed before a response arrived (CORS), run quizpilot-proxy.js and use
@@ -125,10 +125,10 @@ void (async function QuizPilotConsoleAI() {
    * ======================================================================= */
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
-  const norm = (s) => String(s == null ? '' : s).normalize('NFKC').replace(/[‘’‛]/g, "'")
-    .replace(/[“”‟]/g, '"').replace(/[ \s]+/g, ' ').trim();
+  const norm = (s) => String(s == null ? '' : s).normalize('NFKC').replace(/[\u2018\u2019\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201F]/g, '"').replace(/[\u00A0\s]+/g, ' ').trim();
   const lower = (s) => norm(s).toLowerCase();
-  const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+  const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + '\u2026' : s);
   const optionIdFor = (i) => { let s = ''; i += 1; while (i > 0) { const r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); } return s; };
   const normId = (v) => String(v == null ? '' : v).toUpperCase().replace(/^OPTION\s*/, '').replace(/[^A-Z0-9]/g, '');
 
@@ -302,7 +302,7 @@ void (async function QuizPilotConsoleAI() {
 
   function environmentReport(docs, crossOrigin) {
     const notes = [];
-    if (crossOrigin.length) notes.push(`${crossOrigin.length} cross-origin iframe(s) cannot be read from here: ${crossOrigin.slice(0, 3).join(', ')}${crossOrigin.length > 3 ? ', …' : ''}. If the quiz is inside one, open that iframe URL in its own tab and run QuizPilot there.`);
+    if (crossOrigin.length) notes.push(`${crossOrigin.length} cross-origin iframe(s) cannot be read from here: ${crossOrigin.slice(0, 3).join(', ')}${crossOrigin.length > 3 ? ', \u2026' : ''}. If the quiz is inside one, open that iframe URL in its own tab and run QuizPilot there.`);
     let bigCanvas = 0, closedHosts = 0, editables = 0, customSelects = 0, unsupportedInputs = 0;
     for (const d of docs) {
       deepQueryAll(d, 'canvas').forEach(c => { const r = c.getBoundingClientRect(); if (r.width * r.height > 60000 && isRendered(c)) bigCanvas++; });
@@ -655,7 +655,7 @@ void (async function QuizPilotConsoleAI() {
       const pieces = [];
       const add = (s) => { s = norm(s); if (s && !pieces.some(p => p.includes(s))) { for (let i = pieces.length - 1; i >= 0; i--) if (s.includes(pieces[i])) pieces.splice(i, 1); pieces.push(s); } };
       add(before); sources.forEach(add); add(containerText);
-      let qText = norm(pieces.join(' — '));
+      let qText = norm(pieces.join(' \u2014 '));
       if (!qText && fl && fl.placeholder) qText = fl.placeholder;
       qText = truncate(qText, 1500);
 
@@ -681,7 +681,7 @@ void (async function QuizPilotConsoleAI() {
           if (!t) return false;
           if (o.disabled) return false;
           if (o.value === '' && (i === 0 || /^(-+|select|choose|pick|please)/i.test(t))) return false;
-          if (/^[-–—\s]*(select|choose|pick)\b.*[-–—\s]*$/i.test(t) && i === 0) return false;
+          if (/^[-\u2013\u2014\s]*(select|choose|pick)\b.*[-\u2013\u2014\s]*$/i.test(t) && i === 0) return false;
           return true;
         });
         options = real.map((o, i) => ({ id: optionIdFor(i), text: norm(o.text), optionEl: o }));
@@ -894,7 +894,7 @@ void (async function QuizPilotConsoleAI() {
         if (start < 0) continue;
         const slice = balancedSlice(c, start);
         if (!slice) continue;
-        const attempts = [slice, slice.replace(/,\s*([}\]])/g, '$1'), slice.replace(/[“”]/g, '"').replace(/,\s*([}\]])/g, '$1')];
+        const attempts = [slice, slice.replace(/,\s*([}\]])/g, '$1'), slice.replace(/[\u201C\u201D]/g, '"').replace(/,\s*([}\]])/g, '$1')];
         for (const a of attempts) {
           try {
             const v = JSON.parse(a);
@@ -1083,7 +1083,7 @@ void (async function QuizPilotConsoleAI() {
    * ======================================================================= */
   const MARKER_RE = /^\s*(?:\(\s*(?:[a-z]|\d{1,2}|[ivx]{1,4})\s*\)|\[\s*(?:[a-z]|\d{1,2})\s*\]|(?:[a-z]|\d{1,2}|[ivx]{1,4})\s*[).:\]-])\s*/i;
   const optKey = (s) => lower(s).replace(MARKER_RE, '').replace(/[\s.,;:!?]+$/, '').trim();
-  const tokens = (s) => lower(s).replace(MARKER_RE, '').split(/[^a-z0-9À- ]+/i).filter(Boolean);
+  const tokens = (s) => lower(s).replace(MARKER_RE, '').split(/[^a-z0-9\u00C0-\uFFFF]+/i).filter(Boolean);
   function textScore(a, b) {
     const ka = optKey(a), kb = optKey(b);
     if (!ka || !kb) return 0;
@@ -1330,7 +1330,7 @@ void (async function QuizPilotConsoleAI() {
     console.info(TAG, 'Security note: your API key is held in this page\'s memory and sent in request headers. Page scripts, extensions and anyone with DevTools access can read it. Use a dedicated key and revoke it after testing.');
 
     // --- API key ---
-    let apiKey = norm((CONFIG.NVIDIA_API_KEY === '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' ? '' : CONFIG.NVIDIA_API_KEY) || (typeof W.QUIZPILOT_NVIDIA_KEY === 'string' ? W.QUIZPILOT_NVIDIA_KEY : ''));
+    let apiKey = norm((CONFIG.NVIDIA_API_KEY === 'PASTE_YOUR_NVIDIA_KEY_HERE' ? '' : CONFIG.NVIDIA_API_KEY) || (typeof W.QUIZPILOT_NVIDIA_KEY === 'string' ? W.QUIZPILOT_NVIDIA_KEY : ''));
     let localProxy = false;
     try { localProxy = /^(127\.0\.0\.1|localhost|\[::1\])$/i.test(new URL(baseUrl()).hostname); } catch (_) { throw new StopError('CONFIG.API_BASE_URL is not a valid URL.'); }
     if (!apiKey && localProxy) { apiKey = 'proxy-managed'; log('Using the local proxy at ' + baseUrl() + ' (the proxy supplies the API key).'); }
