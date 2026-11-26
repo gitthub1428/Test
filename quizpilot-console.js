@@ -37,8 +37,7 @@ void (async function QuizPilotConsoleAI() {
     // OpenAI-compatible NVIDIA endpoint. If the console reports that the request
     // failed before a response arrived (CORS), run quizpilot-proxy.js and use
     // 'http://127.0.0.1:8787/v1' here, leaving NVIDIA_API_KEY empty.
-    API_BASE_URL: 'https://integrate.api.nvidia.com/v1',
-
+API_BASE_URL: 'https://quizpilot-relay.github1428.workers.dev/v1',
     // Manual model, e.g. 'meta/llama-3.3-70b-instruct'. Empty = auto-discover.
     MODEL: '',
     // true = use ONLY the manual MODEL; false = fall back to other models if it fails.
