@@ -3,242 +3,202 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>QuizPilot Launcher</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuizPilot AI</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #090b10;
+  --panel: #11151e;
+  --border: #252c39;
+  --text: #f3f5fa;
+  --muted: #929bad;
+  --accent: #8b7cff;
+  --green: #51d6a1;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(ellipse at top, #17172d, var(--bg) 55%);
+  color: var(--text);
+  font-family: Inter, system-ui, Arial, sans-serif;
+  padding: 30px 16px;
+}
+main { max-width: 850px; margin: auto; }
+header { margin: 24px 0 30px; }
+.logo { color: var(--accent); font-size: 13px; font-weight: 800; letter-spacing: 3px; }
+h1 { font-size: clamp(32px, 6vw, 48px); margin: 10px 0; letter-spacing: -2px; }
+.subtitle { color: var(--muted); line-height: 1.6; }
+.panel {
+  background: rgba(17,21,30,.94);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px;
+  margin-bottom: 18px;
+}
+label { display: block; font-size: 13px; color: #c6ccda; margin-bottom: 10px; }
+textarea {
+  width: 100%; min-height: 210px; resize: vertical;
+  background: #090d15; color: white;
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 15px; font: 14px/1.7 inherit; outline: none;
+}
+textarea:focus { border-color: var(--accent); }
+button {
+  border: 0; border-radius: 10px; padding: 13px 19px;
+  background: var(--accent); color: white;
+  font-weight: 750; cursor: pointer; margin-top: 14px;
+}
+button:disabled { opacity: .5; cursor: wait; }
+.secondary { background: #252b39; margin-left: 8px; }
+.status { color: var(--muted); font-size: 13px; margin-top: 14px; }
+.result { white-space: pre-wrap; line-height: 1.75; overflow-wrap: anywhere; }
+.answer { color: var(--green); font-weight: 750; }
+.small { color: var(--muted); font-size: 12px; line-height: 1.6; }
+footer { color: var(--muted); text-align: center; font-size: 12px; padding: 20px; }
+</style>
 </head>
 <body>
-<h2>QuizPilot</h2>
-<p>Generate your console launcher for permitted practice quizzes.</p>
-<button id="generate">Generate launcher</button>
-<button id="copy">Copy launcher</button>
-<pre id="status">Ready</pre>
+<main>
+  <header>
+    <div class="logo">QUIZPILOT / AI</div>
+    <h1>Your AI study assistant.</h1>
+    <p class="subtitle">Paste practice questions and get answers with clear explanations, powered by NVIDIA AI.</p>
+  </header>
+
+  <section class="panel">
+    <label for="questions">YOUR PRACTICE QUESTIONS</label>
+    <textarea id="questions" placeholder="Paste your practice questions here...
+
+Example:
+1. What is the capital of France?
+A. London
+B. Paris
+C. Rome
+D. Berlin
+
+2. What is 12 × 8?"></textarea>
+    <button id="solve">Analyse questions</button>
+    <button id="clear" class="secondary">Clear</button>
+    <div id="status" class="status">Ready.</div>
+  </section>
+
+  <section class="panel">
+    <label>AI RESULTS</label>
+    <div id="results" class="result">Your answers and explanations will appear here.</div>
+  </section>
+
+  <p class="small">
+    Privacy note: Your questions are sent to NVIDIA's API for processing.
+    Do not paste passwords, private information, or confidential material.
+  </p>
+  <footer>QUIZPILOT AI · Practice smarter</footer>
+</main>
 
 <script>
-// =======================================
-// QUIZPILOT CONFIGURATION
-// =======================================
-
+/*
+  IMPORTANT:
+  Paste your NEW NVIDIA API key between the quotation marks.
+  Never publish this file with a real key in a public GitHub repository.
+*/
 const NVIDIA_API_KEY = "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";
-const NVIDIA_MODEL = ""; // Optional: enter a compatible model ID
 
-// =======================================
-// PRACTICE QUIZ ANALYSIS SCRIPT
-// =======================================
+const NVIDIA_MODEL = "meta/llama-3.1-8b-instruct";
+const API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
-const PRACTICE_SCRIPT = String.raw`
-(async () => {
-"use strict";
+const questionBox = document.getElementById("questions");
+const resultsBox = document.getElementById("results");
+const statusBox = document.getElementById("status");
+const solveButton = document.getElementById("solve");
 
-const log = (...x) => console.log("[QuizPilot]", ...x);
-const clean = s => (s || "").replace(/\s+/g, " ").trim();
-
-log("Starting...");
-
-if (typeof CONFIG === "undefined") {
-  log("Launcher configuration missing.");
-  return;
-}
-
-const groups = new Map();
-
-document.querySelectorAll(
-  'input[type="radio"], input[type="checkbox"]'
-).forEach(el => {
-  if (!el.name) return;
-  if (!groups.has(el.name)) groups.set(el.name, []);
-  groups.get(el.name).push(el);
+document.getElementById("clear").addEventListener("click", () => {
+  questionBox.value = "";
+  resultsBox.textContent = "Your answers and explanations will appear here.";
+  statusBox.textContent = "Cleared.";
 });
 
-const questions = [];
-let index = 0;
-
-for (const [, elements] of groups) {
-  if (elements.length < 2) continue;
-
-  const parent = elements[0].closest(
-    "fieldset, li, [role=group], .question, .form-group"
-  ) || elements[0].parentElement?.parentElement;
-
-  if (!parent) continue;
-
-  const options = elements.map(el => {
-    const label = el.labels?.[0];
-    return clean(label?.innerText || el.value);
-  }).filter(Boolean);
-
-  const question = clean(parent.innerText);
-
-  if (!question || !options.length) continue;
-
-  questions.push({
-    id: "q" + (++index),
-    question,
-    options
-  });
+function setStatus(message) {
+  statusBox.textContent = message;
 }
 
-if (!questions.length) {
-  log("No supported question groups found.");
-  return;
+function extractText(data) {
+  return data?.choices?.[0]?.message?.content || "";
 }
 
-log("Detected", questions.length, "questions.");
+async function analyseQuestions() {
+  const questions = questionBox.value.trim();
 
-try {
-  let model = CONFIG.model;
-
-  if (!model) {
-    const modelsResponse = await fetch(
-      "https://integrate.api.nvidia.com/v1/models",
-      {
-        headers: {
-          Authorization: "Bearer " + CONFIG.key
-        }
-      }
-    );
-
-    if (!modelsResponse.ok) {
-      throw Error("NVIDIA model discovery failed: " +
-        modelsResponse.status);
-    }
-
-    const modelsData = await modelsResponse.json();
-
-    const available = (modelsData.data || []).filter(m =>
-      m.id && !/embed|rerank|guard|vision|audio|image/i.test(m.id)
-    );
-
-    if (!available.length) throw Error("No candidate models found.");
-
-    model = available[0].id;
+  if (!questions) {
+    setStatus("Please paste some practice questions first.");
+    questionBox.focus();
+    return;
   }
 
-  log("Selected model:", model);
-  log("Analyzing practice questions...");
+  if (!NVIDIA_API_KEY || NVIDIA_API_KEY.includes("PASTE_YOUR")) {
+    setStatus("Add your NVIDIA API key inside the code first.");
+    return;
+  }
 
-  const response = await fetch(
-    "https://integrate.api.nvidia.com/v1/chat/completions",
-    {
+  solveButton.disabled = true;
+  solveButton.textContent = "Analysing...";
+  resultsBox.textContent = "Thinking through your questions...";
+  setStatus("Connecting to NVIDIA AI...");
+
+  try {
+    const response = await fetch(API_URL, {
       method: "POST",
       headers: {
-        Authorization: "Bearer " + CONFIG.key,
+        "Authorization": "Bearer " + NVIDIA_API_KEY,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model,
-        temperature: 0.1,
+        model: NVIDIA_MODEL,
+        temperature: 0.2,
+        max_tokens: 3000,
         messages: [
           {
             role: "system",
             content:
-              "You are an educational practice assistant. " +
-              "Analyze the questions and options. Return JSON only: " +
-              '{"answers":[{"id":"q1","answer":"B",' +
-              '"explanation":"...","confidence":0.95}]}. ' +
-              "Do not invent options. Mark uncertainty honestly."
+              "You are QuizPilot, a careful educational practice assistant. " +
+              "Answer the user's practice questions accurately. " +
+              "For each question, state the question number, correct option or answer, " +
+              "and a concise explanation. If a question is ambiguous or missing information, " +
+              "say so rather than guessing. Format the response clearly."
           },
           {
             role: "user",
-            content: JSON.stringify(questions)
+            content: questions
           }
         ]
       })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      const message = data?.error?.message || data?.detail || "API request failed.";
+      throw new Error("NVIDIA API: " + message);
     }
-  );
 
-  if (!response.ok) {
-    throw Error("NVIDIA request failed: " + response.status +
-      " " + (await response.text()).slice(0, 300));
+    const answer = extractText(data);
+
+    if (!answer.trim()) {
+      throw new Error("The AI returned an empty response. Try again.");
+    }
+
+    resultsBox.textContent = answer;
+    setStatus("Analysis complete.");
+  } catch (error) {
+    resultsBox.textContent = "Unable to complete the request.\n\n" + error.message;
+    setStatus("Something went wrong. Check your key, connection, and browser console.");
+  } finally {
+    solveButton.disabled = false;
+    solveButton.textContent = "Analyse questions";
   }
-
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
-
-  if (!content) throw Error("Empty AI response.");
-
-  const jsonText = content
-    .replace(/^\s*```(?:json)?/i, "")
-    .replace(/```\s*$/, "")
-    .trim();
-
-  const result = JSON.parse(jsonText);
-
-  console.group("[QuizPilot] Practice results");
-
-  for (const item of result.answers || []) {
-    console.group(item.id);
-    log("Answer:", item.answer);
-    log("Confidence:", item.confidence);
-    log("Explanation:", item.explanation);
-    console.groupEnd();
-  }
-
-  console.groupEnd();
-
-  const output = JSON.stringify(result, null, 2);
-
-  try {
-    await navigator.clipboard.writeText(output);
-    log("Results copied to clipboard.");
-  } catch {
-    log("Clipboard unavailable. Results:", output);
-  }
-
-  log("Analysis completed.");
-
-} catch (error) {
-  console.error("[QuizPilot] Error:", error);
 }
-})();
-`;
 
-let launcher = "";
-
-document.getElementById("generate").onclick = () => {
-  if (
-    !NVIDIA_API_KEY ||
-    NVIDIA_API_KEY === "PASTE_YOUR_NVIDIA_API_KEY_HERE"
-  ) {
-    document.getElementById("status").textContent =
-      "Add your NVIDIA API key in the HTML first.";
-    return;
-  }
-
-  const config = JSON.stringify({
-    key: NVIDIA_API_KEY,
-    model: NVIDIA_MODEL
-  });
-
-  const script = PRACTICE_SCRIPT.replace(
-    'if (typeof CONFIG === "undefined") {',
-    'const CONFIG = ' + config + ';\nif (typeof CONFIG === "undefined") {'
-  );
-
-  launcher =
-    "eval(decodeURIComponent('" +
-    encodeURIComponent(script) +
-    "'))";
-
-  document.getElementById("status").textContent =
-    "Launcher generated. Click Copy launcher.";
-};
-
-document.getElementById("copy").onclick = async () => {
-  if (!launcher) {
-    document.getElementById("status").textContent =
-      "Generate the launcher first.";
-    return;
-  }
-
-  try {
-    await navigator.clipboard.writeText(launcher);
-    document.getElementById("status").textContent =
-      "Copied. Paste into Console on a permitted practice page.";
-  } catch {
-    document.getElementById("status").textContent =
-      "Clipboard permission denied.";
-  }
-};
+solveButton.addEventListener("click", analyseQuestions);
 </script>
 </body>
 </html>
