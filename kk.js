@@ -32,7 +32,7 @@ void (async function QuizPilotConsoleAI() {
   const CONFIG = {
     // Leave empty to be asked with a browser prompt, or set
     // window.QUIZPILOT_NVIDIA_KEY = 'nvapi-...' in the console before pasting.
-    NVIDIA_API_KEY:'nvapiKpKNQpJvo66LVZBU-Q1zor9LaNDHS7M4ZkNOe6Aw1vsFkgnwil8OQFoBVGo7UnGA',   // <-- put your nvapi-... key between the quotes
+    NVIDIA_API_KEY: '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',    // <-- put your nvapi-... key between the quotes
 
     // OpenAI-compatible NVIDIA endpoint. If the console reports that the request
     // failed before a response arrived (CORS), run quizpilot-proxy.js and use
