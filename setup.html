@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuizPilot setup</title>
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; max-width: 560px; margin: 3rem auto; padding: 0 1.2rem; color: #1d1d1f; line-height: 1.6; }
+  h1 { font-size: 1.5rem; margin-bottom: .3rem; }
+  .muted { color: #666; font-size: .95rem; }
+  .btn { display: inline-block; margin: 1.5rem 0; padding: .9rem 1.6rem; background: #76b900; color: #fff; font-weight: 700; font-size: 1.1rem; border-radius: 10px; text-decoration: none; cursor: grab; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+  ol { padding-left: 1.2rem; }
+  li { margin: .5rem 0; }
+  kbd { background: #eee; border: 1px solid #ccc; border-bottom-width: 2px; border-radius: 4px; padding: 0 .35rem; font-size: .9em; }
+  .err { background: #fde8e8; color: #9b1c1c; padding: .8rem 1rem; border-radius: 8px; }
+  code { background: #f3f3f3; padding: .1rem .3rem; border-radius: 4px; word-break: break-all; }
+</style>
+</head>
+<body>
+  <h1>QuizPilot setup</h1>
+  <p class="muted" id="who"></p>
+
+  <div id="main">
+    <a class="btn" id="bm" href="#">QuizPilot</a>
+
+    <ol>
+      <li>Press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> to show your bookmarks bar.</li>
+      <li><b>Drag the green button</b> onto the bookmarks bar. Don't click it; drag it.</li>
+      <li>Open your practice quiz and <b>click the QuizPilot bookmark</b>.</li>
+      <li>Optional: press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>J</kbd> to watch the progress and see the report.</li>
+    </ol>
+    <p class="muted">It fills the answers it is confident about and never submits. Check the answers, then submit yourself.</p>
+  </div>
+
+  <div id="bad" class="err" hidden>This setup link is incomplete. Ask whoever sent it for your personal link (it ends with <code>?f=yourname</code>).</div>
+
+<script>
+  (function () {
+    var params = new URLSearchParams(location.search);
+    var f = (params.get('f') || '').trim();
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(f)) {
+      document.getElementById('main').hidden = true;
+      document.getElementById('bad').hidden = false;
+      return;
+    }
+    // Folder of this page, e.g. https://user.github.io/Test/
+    var base = location.href.split('?')[0].replace(/[^/]*$/, '');
+    var scriptUrl = base + f + '.js';
+    var bm = document.getElementById('bm');
+    bm.href = "javascript:void import('" + scriptUrl + "?'+Date.now())";
+    bm.textContent = 'QuizPilot (' + f + ')';
+    bm.addEventListener('click', function (e) {
+      e.preventDefault();
+      alert('Drag this button to your bookmarks bar instead of clicking it.');
+    });
+    document.getElementById('who').textContent = 'Personal setup for: ' + f;
+  })();
+</script>
+</body>
+</html>
