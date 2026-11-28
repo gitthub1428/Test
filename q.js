@@ -58,7 +58,7 @@ API_BASE_URL: 'https://quizpilot-relay.github1428.workers.dev/v1',
 
     AUTO_FILL: true,                  // false = only print suggested answers
     MIN_CONFIDENCE_TO_FILL: 0.7,      // answers below this are reported, not filled
-    OVERWRITE_EXISTING_ANSWERS: false,// false = leave questions you already answered alone
+    OVERWRITE_EXISTING_ANSWERS: true,// false = leave questions you already answered alone
     CLEAR_UNSELECTED_CHECKBOXES: true,// make checkbox groups match the answer exactly
     FILL_TEXT_FIELDS: true,           // text inputs and textareas
 
