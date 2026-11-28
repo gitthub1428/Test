@@ -2,7 +2,7 @@
  * QuizPilot Console AI  v1.0.0
  * ---------------------------------------------------------------------------
  * A console-only AI assistant for PERMITTED PRACTICE quizzes and forms.
- * Paste this whole file into the browser DevTools Console on the quiz page.
+ * Paste this whole file into the browser DevTools Console on the quiz page. 
  *
  * What it does:
  *   detect questions -> ask an NVIDIA-hosted chat model -> validate the JSON
