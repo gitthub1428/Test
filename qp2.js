@@ -1,5 +1,5 @@
 /*!
- * QuizPilot 2  v2.0.0  - console / bookmarklet AI assistant for practice quizzes and forms
+ * QuizPilot 3  v3.0.0  - console / bookmarklet AI assistant for practice quizzes and forms
  * ---------------------------------------------------------------------------
  * Paste your API key(s) below. The provider (NVIDIA, OpenAI, Anthropic, Gemini,
  * Groq, OpenRouter, Mistral, DeepSeek, xAI, Cerebras, Together, Fireworks,
@@ -15,47 +15,45 @@
  * It never clicks Submit or Next, stops on proctored / locked-down pages, and
  * leaves personal and opinion questions for you.
  *
- * Commands:  qp.stop()   qp.scan()   qp.report()   qp.clear()
+ * Commands:  qp.stop()   qp.rescan()   qp.lastReport   qp.clearCache()   (QuizPilot.* also works)
  *
  * WARNING: keys in this file are readable by anyone who can open the file,
  * by the page you run it on, and by browser extensions.
  * ---------------------------------------------------------------------------
  */
-void (async function QuizPilot2() {
+void (async function QuizPilot3() {
   'use strict';
 
   /* =========================================================================
    * 1. CONFIGURATION
    * ======================================================================= */
   const CONFIG = {
-    // One or more keys from ANY supported provider. Extra keys are backups.
-    // You can force a provider with a prefix, e.g. 'groq:gsk_...' or 'mistral:abc...'.
-      API_KEYS: ['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'],
+    // Your NVIDIA key (nvapi-...). Other services' keys also work; extra keys are backups.
+    API_KEYS: ['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'],
 
-    // Your Cloudflare relay (handles CORS for every provider). '' = call providers directly.
+    // Your Cloudflare relay (use the v3 relay code for zero red errors).
     RELAY_URL: 'https://quizpilot-relay2.github1428.workers.dev',
 
-    MODE: 'fast',                     // 'fast' = quickest models, no explanations; 'accurate' = stronger models
-    MODEL: '',                        // optional exact model id for the FIRST key, e.g. 'llama-3.3-70b-versatile'
+    MODE: 'fast',                     // 'fast' or 'accurate' (stronger, adds explanations)
+    SOLVE_IMAGES: true,               // questions/options with pictures go to an image-capable AI
 
-    WATCH: true,                      // keep answering questions that appear later (one-by-one quizzes)
-    WATCH_MINUTES: 120,               // stop watching after this long
+    WATCH: true,                      // keep answering questions that appear later
+    WATCH_MINUTES: 120,
 
-    AUTO_FILL: true,                  // false = only print suggested answers
-    MIN_CONFIDENCE_TO_FILL: 0.7,      // answers below this are shown, not filled
-    OVERWRITE_EXISTING_ANSWERS: false,// never change answers you already gave
+    AUTO_FILL: true,                  // false = only show suggested answers
+    MIN_CONFIDENCE_TO_FILL: 0.7,      // less sure than this = shown, not filled
+    OVERWRITE_EXISTING_ANSWERS: false,
     CLEAR_UNSELECTED_CHECKBOXES: true,
     FILL_TEXT_FIELDS: true,
-    CACHE_ANSWERS: true,              // repeated / re-rendered questions are answered instantly
+    CACHE_ANSWERS: true,
 
-    QUESTIONS_PER_REQUEST: 8,         // small batches...
-    PARALLEL_REQUESTS: 4,             // ...sent at the same time = faster
-    REQUEST_TIMEOUT_MS: 60000,
-    MAX_RETRIES: 2,
-    MAX_MODELS_PER_KEY: 3,
+    QUESTIONS_PER_REQUEST: 5,
+    PARALLEL_REQUESTS: 4,
+    HEDGE_AFTER_MS: 9000,             // if an answer is slow, ask a backup AI in parallel
+    MAX_REQUEST_MS: 45000,
     MAX_TOKENS: 4096,
 
-    DOM_QUIET_MS: 150,                // "page settled" = no changes for this long
+    DOM_QUIET_MS: 150,
     DOM_STABLE_TIMEOUT_MS: 4000,
     WAIT_FOR_QUESTIONS_MS: 10000,
 
@@ -87,10 +85,10 @@ void (async function QuizPilot2() {
    * 3. SINGLE INSTANCE + PUBLIC HANDLE
    * ======================================================================= */
   const W = window;
-  const prev = W.__QuizPilot2;
+  const prev = W.__QuizPilot3;
   if (prev && prev.running) {
-    if (prev.watching && typeof prev.rescan === 'function') { log('Already running and watching - rescanning now. (qp.stop() to stop.)'); prev.rescan(); }
-    else warn('Already running in this tab. Wait for it to finish, or run qp.stop().');
+    if (prev.watching && typeof prev.rescan === 'function') { log('Already running and watching - rescanning now. (QuizPilot.stop() to stop.)'); prev.rescan(); }
+    else warn('Already running in this tab. Wait for it to finish, or run QuizPilot.stop().');
     return;
   }
   const state = {
@@ -98,10 +96,10 @@ void (async function QuizPilot2() {
     seen: new WeakMap(),            // first control element -> fingerprint already handled
     counter: 0, rows: [], cleanup: [], rescan: null,
   };
-  W.__QuizPilot2 = state;
-  const answerCache = (W.__QuizPilot2Cache instanceof Map) ? W.__QuizPilot2Cache : (W.__QuizPilot2Cache = new Map());
+  W.__QuizPilot3 = state;
+  const answerCache = (W.__QuizPilot3Cache instanceof Map) ? W.__QuizPilot3Cache : (W.__QuizPilot3Cache = new Map());
   W.QuizPilot = {
-    version: '2.0.0',
+    version: '3.0.0',
     lastReport: null,
     stop() {
       if (!state.running) { log('Not running.'); return; }
@@ -111,15 +109,9 @@ void (async function QuizPilot2() {
     },
     abort() { this.stop(); },
     rescan() { if (state.rescan) state.rescan(); else log('Nothing to rescan.'); },
-    clearCache() { answerCache.clear(); log('Answer cache cleared.'); },
-    report() {
-      const r = this.lastReport;
-      if (!r || !r.results.length) { log('No results yet.'); return; }
-      r.results.forEach(x => console.log(`${x.id} | ${x.status} | ${x.answer || '-'} | ${x.confidence || ''} | ${truncate(x.question || '', 70)}`));
-    },
+    clearCache() { answerCache.clear(); try { Object.keys(localStorage).filter(k => k.startsWith('quizpilot3:')).forEach(k => localStorage.removeItem(k)); } catch (_) { /* ignore */ } log('Answer and AI caches cleared.'); },
   };
-  // Short aliases:  qp.stop()  qp.scan()  qp.report()  qp.clear()
-  W.qp = { stop: () => W.QuizPilot.stop(), scan: () => W.QuizPilot.rescan(), report: () => W.QuizPilot.report(), clear: () => W.QuizPilot.clearCache() };
+  W.qp = W.QuizPilot;
   function shutdown(reason) {
     state.cleanup.splice(0).forEach(fn => { try { fn(); } catch (_) { /* ignore */ } });
     if (state.watching) log('Watching stopped. ' + (reason || ''));
@@ -279,10 +271,10 @@ void (async function QuizPilot2() {
   }
 
   /* =========================================================================
-   * 6. ENVIRONMENT / COMPATIBILITY CHECKS + NOISE FILTERS
+   * 6. ENVIRONMENT CHECKS + NOISE FILTERS (ads, menus, comments, chat, cart...)
    * ======================================================================= */
   // ---- noise filters: ads, cookie banners, navigation, search, login/newsletter forms ----
-  const AD_RE = /(^|[\s_\-])(ads?|adv|advert\w*|sponsor\w*|promo(tion|ted)?s?|banner\w*|adsbygoogle|ad-?slot|ad-?unit|ad-?container|ad-?wrap\w*|dfp|gpt-ad|taboola|outbrain|mgid|revcontent|carbonads?|cookie\w*|consent\w*|gdpr|cmp|newsletter|subscribe\w*|signup|sign-up|popup-?ad|interstitial)([\s_\-]|$)/i;
+  const AD_RE = /(^|[\s_\-])(ads?|adv|advert\w*|sponsor\w*|promo(tion|ted)?s?|banner\w*|adsbygoogle|ad-?slot|ad-?unit|ad-?container|ad-?wrap\w*|dfp|gpt-ad|taboola|outbrain|mgid|revcontent|carbonads?|cookie\w*|consent\w*|gdpr|cmp|newsletter|subscribe\w*|signup|sign-up|popup-?ad|interstitial|comments?|comment-\w+|reply|chat\w*|cart|checkout|coupon|pagination|share\w*|social\w*|sidebar|related|recommend\w*|trending|captcha|recaptcha|lang-?switch\w*|language-?\w*|currency\w*)([\s_\-]|$)/i;
   const AD_HOST_RE = /(doubleclick|googlesyndication|googleadservices|adservice|amazon-adsystem|adnxs|taboola|outbrain|criteo|pubmatic|rubiconproject|openx|mgid|media\.net|adsrvr|moatads|zedo)/i;
   function attrBlob(el) { return ((el.id || '') + ' ' + (el.getAttribute && (el.getAttribute('class') || '')) + ' ' + (el.getAttribute && (el.getAttribute('data-ad') !== null ? 'ad' : ''))).trim(); }
   function isAdFrame(fr) {
@@ -294,14 +286,29 @@ void (async function QuizPilot2() {
       if (n.nodeType !== 1) continue;
       const tag = n.tagName;
       if (tag === 'BODY' || tag === 'HTML') break;
-      if (tag === 'NAV' || tag === 'INS') return true;
+      if (tag === 'NAV' || tag === 'INS' || tag === 'ASIDE') return true;
       const role = (n.getAttribute('role') || '').toLowerCase();
-      if (role === 'navigation' || role === 'search' || role === 'banner' || role === 'contentinfo') return true;
+      if (role === 'navigation' || role === 'search' || role === 'banner' || role === 'contentinfo' || role === 'complementary') return true;
       if ((tag === 'HEADER' || tag === 'FOOTER') && n.parentElement && n.parentElement.tagName === 'BODY') return true;
       if (tag === 'FORM' && (n.querySelector('input[type="password"]') || n.getAttribute('role') === 'search' || /search|login|signin|sign-in|newsletter|subscribe/i.test(attrBlob(n) + ' ' + (n.getAttribute('action') || '')))) return true;
       if (AD_RE.test(attrBlob(n)) || /advert|sponsor/i.test(n.getAttribute('aria-label') || '')) return true;
     }
     return false;
+  }
+
+  function optionImage(el, nodes) {
+    const pick = (root) => { if (!root || root.nodeType !== 1) return null; const im = root.tagName === 'IMG' ? root : root.querySelector('img'); return im && isRendered(im) ? im : null; };
+    for (const n of (nodes || [])) { const im = pick(n); if (im) return im; }
+    if (el.labels) for (const l of Array.from(el.labels)) { const im = pick(l); if (im) return im; }
+    return el.getAttribute && el.getAttribute('role') ? pick(el) : null;
+  }
+  const NOISE_FIELD_RE = /(search|coupon|promo|voucher|comment|reply|newsletter|subscribe|captcha|sort|filter|language|\blang\b|currency|country|region|per.?page|items per|results per|theme|font.?size|zoom|quantity|qty)/i;
+  function isNoiseField(el, kind) {
+    if (kind !== 'select' && kind !== 'text' && kind !== 'textarea') return false;
+    if ((el.getAttribute('type') || '').toLowerCase() === 'search') return true;
+    const labels = el.labels ? Array.from(el.labels).map(l => norm(l.textContent)).filter(t => t.length < 30) : [];
+    const blob = [el.name, el.id, el.getAttribute('placeholder'), el.getAttribute('aria-label'), el.title, ...labels].filter(Boolean).join(' ');
+    return NOISE_FIELD_RE.test(blob);
   }
 
   function collectDocuments() {
@@ -322,7 +329,7 @@ void (async function QuizPilot2() {
     return { docs, crossOrigin };
   }
 
-  // (exam guard moved to the EXAM GUARD block near the bottom of this file)
+  // Exam check: see the EXAM GUARD block near the bottom of this file.
 
   function environmentReport(docs, crossOrigin) {
     const notes = [];
@@ -397,7 +404,7 @@ void (async function QuizPilot2() {
           if (el.querySelector(`input[type="${nativeType}"]`)) return; // prefer the native input inside
         }
         if (!isUsable(el, kind)) return;
-        if (isNoiseControl(el)) return;
+        if (isNoiseControl(el) || isNoiseField(el, kind)) return;
         out.push({ el, kind, doc: d });
       });
     }
@@ -663,6 +670,7 @@ void (async function QuizPilot2() {
       // d) exclusive container text (nested layouts)
       let container = els.length > 1 ? lowestCommonAncestor(els) : getParent(first);
       let containerText = '';
+      let qContainer = null;
       if (container && !otherControlsInside(container, own)) {
         for (let p = getParent(container); p && p.nodeType === 1; p = getParent(p)) {
           if (/^(BODY|HTML|FORM|MAIN)$/.test(p.tagName) || otherControlsInside(p, own)) break;
@@ -670,6 +678,7 @@ void (async function QuizPilot2() {
           container = p;
         }
         containerText = textOf(container, exclude);
+        qContainer = container;
       }
       // e) preceding text in document order (flat layouts)
       let before = '';
@@ -720,6 +729,10 @@ void (async function QuizPilot2() {
         const multiple = g.kind === 'checkbox' || g.kind === 'aria-checkbox';
         type = multiple ? 'multiple_choice' : 'single_choice';
         options = g.items.map((it, i) => ({ id: optionIdFor(i), text: labelText.get(it.el) || '', el: it.el }));
+        options.forEach(o => {
+          const im = optionImage(o.el, labelNodes.get(o.el));
+          if (im) { o.img = im; if (!o.text) o.text = norm(im.getAttribute('alt') || im.title || '') || ('picture ' + o.id); }
+        });
         if (options.some(o => !o.text)) { skipped.push({ ...base, text: qText, reason: 'At least one option has no readable label; refusing to guess.' }); return; }
         if (options.length < 2) { skipped.push({ ...base, text: qText, reason: multiple ? 'Standalone checkbox (likely a consent/toggle), not a quiz question.' : 'Only one radio option found.' }); return; }
       } else {
@@ -732,8 +745,23 @@ void (async function QuizPilot2() {
         debug('Duplicate-looking question text:', truncate(qText, 80));
       }
       fingerprints.add(fp);
-      const cacheKey = lower(qText) + '||' + type + '||' + options.map(o => lower(o.text)).join('|');
-      questions.push({ ...base, type, text: qText, options, fingerprint: fp, cacheKey });
+      const images = [];
+      if (CONFIG.SOLVE_IMAGES) {
+        options.forEach(o => { if (o.img) images.push({ el: o.img, opt: o.id }); });
+        if (qContainer) {
+          const inOption = (im) => options.some(o => o.el && ((o.el.labels && Array.from(o.el.labels).some(l => l.contains(im))) || (o.el.contains && o.el.contains(im))));
+          for (const im of Array.from(qContainer.querySelectorAll('img'))) {
+            if (images.length >= 4) break;
+            if (images.some(x => x.el === im) || inOption(im) || !isRendered(im)) continue;
+            const r = im.getBoundingClientRect();
+            if (r.width < 40 || r.height < 30) continue;   // icons, bullets
+            images.push({ el: im, opt: null });
+          }
+        }
+      }
+      const imgSig = images.map(x => (x.el.currentSrc || x.el.src || '').slice(-80)).join('|');
+      const cacheKey = lower(qText) + '||' + type + '||' + options.map(o => lower(o.text)).join('|') + (imgSig ? '||' + imgSig : '');
+      questions.push({ ...base, type, text: qText, options, fingerprint: fp + (imgSig ? '||' + imgSig : ''), cacheKey, images });
     });
 
     questions.forEach((q, i) => { q.id = 'q' + (i + 1); });
@@ -788,7 +816,7 @@ void (async function QuizPilot2() {
    * ======================================================================= */
   // kind 'openai' = OpenAI-compatible chat API; 'anthropic' = Anthropic Messages API.
   const PROVIDERS = {
-    nvidia:      { name: 'NVIDIA',       base: 'https://integrate.api.nvidia.com/v1', kind: 'openai', json: false,
+    nvidia:      { name: 'NVIDIA',       base: 'https://integrate.api.nvidia.com/v1', kind: 'openai', json: false, alwaysDiscover: true,
                    fast: ['meta/llama-3.3-70b-instruct', 'meta/llama-3.1-8b-instruct'],
                    accurate: ['meta/llama-3.3-70b-instruct', 'nvidia/llama-3.3-nemotron-super-49b-v1.5', 'qwen/qwen2.5-72b-instruct', 'meta/llama-3.1-405b-instruct'] },
     openai:      { name: 'OpenAI',       base: 'https://api.openai.com/v1', kind: 'openai', json: true,
@@ -844,38 +872,54 @@ void (async function QuizPilot2() {
     return { key: k, candidates: ['openai', 'mistral', 'deepseek', 'together', 'openrouter', 'groq', 'fireworks'], forced: false };
   }
 
+
   /* =========================================================================
-   * 10. HTTP CLIENT (relay-aware, timeouts, clear errors)
+   * 10. HTTP CLIENT (relay envelope = no red console errors, timeouts, cancel)
    * ======================================================================= */
   class ApiError extends Error {
     constructor(kind, message, status, retryAfterMs) { super(message); this.name = 'ApiError'; this.kind = kind; this.status = status || 0; this.retryAfterMs = retryAfterMs || 0; }
   }
   const relay = () => norm(CONFIG.RELAY_URL).replace(/\/+$/, '');
-  function urlFor(provider, path) {
-    return relay() ? `${relay()}/${provider}${path}` : PROVIDERS[provider].base + path;
-  }
+  const net = { envelope: true, envelopeWorked: false };
+  function urlFor(provider, path) { return relay() ? `${relay()}/${provider}${path}` : PROVIDERS[provider].base + path; }
   function headersFor(provider, key, hasBody) {
     const h = { Accept: 'application/json' };
     if (hasBody) h['Content-Type'] = 'application/json';
     if (PROVIDERS[provider].kind === 'anthropic') {
-      h['x-api-key'] = key;
-      h['anthropic-version'] = '2023-06-01';
+      h['x-api-key'] = key; h['anthropic-version'] = '2023-06-01';
       if (!relay()) h['anthropic-dangerous-direct-browser-access'] = 'true';
     } else h.Authorization = 'Bearer ' + key;
+    if (relay() && net.envelope) h['x-qp-envelope'] = '1';
     return h;
   }
+  function classify(status, detail, raMs) {
+    if (status === 401 || status === 403) return new ApiError('auth', `HTTP ${status}: key rejected (${detail})`, status);
+    if (status === 402 || /insufficient|quota|credit|billing|exceeded your current/i.test(detail)) return new ApiError('quota', `HTTP ${status}: out of credits/quota (${detail})`, status);
+    if (status === 429) return new ApiError('rate', `HTTP 429: busy (${detail})`, 429, raMs);
+    if (status === 404 && /QuizPilot relay: (Not allowed|unknown provider)/i.test(detail)) return new ApiError('relay', 'Your relay is outdated. Paste the latest relay code into Cloudflare and Deploy.', 404);
+    if (status === 404 || status === 410) return new ApiError('model', `HTTP ${status}: not available (${detail})`, status);
+    if (status === 400 || status === 422) return new ApiError('bad_request', `HTTP ${status}: ${detail}`, status);
+    if (status === 504 || status === 408) return new ApiError('timeout', `HTTP ${status}: timed out`, status);
+    if (status >= 500) return new ApiError('server', `HTTP ${status}: server error (${detail})`, status, raMs);
+    return new ApiError('bad_request', `HTTP ${status}: ${detail}`, status);
+  }
 
-  async function httpJson(provider, key, path, method, bodyObj) {
+  async function httpJson(provider, key, path, method, bodyObj, opts) {
     checkAbort();
+    opts = opts || {};
     const url = urlFor(provider, path);
     const ctl = new AbortController();
     state.controllers.add(ctl);
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, CONFIG.REQUEST_TIMEOUT_MS);
+    let timedOut = false, cancelled = false;
+    const timeoutMs = opts.timeoutMs || CONFIG.MAX_REQUEST_MS;
+    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs);
+    const onExtAbort = () => { cancelled = true; ctl.abort(); };
+    if (opts.signal) { if (opts.signal.aborted) onExtAbort(); else opts.signal.addEventListener('abort', onExtAbort, { once: true }); }
     let csp = null;
     const host = (() => { try { return new URL(url).host; } catch (_) { return ''; } })();
     const onCsp = (e) => { if (host && String(e.blockedURI || '').includes(host)) csp = e.violatedDirective; };
     document.addEventListener('securitypolicyviolation', onCsp);
+    const usedEnvelope = !!(relay() && net.envelope);
     try {
       const res = await fetch(url, {
         method, signal: ctl.signal, credentials: 'omit', mode: 'cors', cache: 'no-store', referrerPolicy: 'no-referrer',
@@ -884,83 +928,81 @@ void (async function QuizPilot2() {
       const raw = await res.text();
       let body = null;
       try { body = raw ? JSON.parse(raw) : null; } catch (_) { body = null; }
-      if (!res.ok) {
-        const msgObj = body && (body.error || body.detail || body.message || body.title);
-        const detail = scrub(truncate(msgObj ? (typeof msgObj === 'string' ? msgObj : (msgObj.message || safeStringify(msgObj))) : (raw || res.statusText), 300));
-        const ra = res.headers.get('retry-after');
-        const raMs = ra ? (isNaN(Number(ra)) ? Math.max(0, Date.parse(ra) - Date.now()) : Number(ra) * 1000) : 0;
-        if (res.status === 401 || res.status === 403) throw new ApiError('auth', `HTTP ${res.status}: key rejected (${detail})`, res.status);
-        if (res.status === 402 || /insufficient|quota|credit|billing|exceeded your current/i.test(detail)) throw new ApiError('quota', `HTTP ${res.status}: out of credits/quota (${detail})`, res.status);
-        if (res.status === 429) throw new ApiError('rate', `HTTP 429: rate limited (${detail})`, 429, raMs);
-        if (res.status === 404 && /QuizPilot relay|Not allowed|unknown provider/i.test(detail)) throw new ApiError('relay', `Relay refused the request (${detail}). Update your Cloudflare relay to the v2 code.`, 404);
-        if (res.status === 400 || res.status === 422) throw new ApiError('bad_request', `HTTP ${res.status}: ${detail}`, res.status);
-        if (res.status === 404) throw new ApiError('model', `HTTP 404: ${detail}`, 404);
-        if (res.status >= 500) throw new ApiError('server', `HTTP ${res.status}: server error (${detail})`, res.status, raMs);
-        throw new ApiError('bad_request', `HTTP ${res.status}: ${detail}`, res.status);
+      let status = res.status;
+      let raHeader = res.headers.get('retry-after');
+      if (usedEnvelope && body && body.qp && typeof body.qp.status === 'number') {
+        net.envelopeWorked = true;
+        status = body.qp.status; raHeader = body.qp.retryAfter || raHeader; body = body.data;
       }
-      if (body === null) throw new ApiError('server', 'Non-JSON response.', res.status);
+      if (status < 200 || status >= 300) {
+        const msgObj = body && (body.error || body.detail || body.message || body.title);
+        const detail = scrub(truncate(msgObj ? (typeof msgObj === 'string' ? msgObj : (msgObj.message || safeStringify(msgObj))) : (raw || String(status)), 300));
+        const raMs = raHeader ? (isNaN(Number(raHeader)) ? Math.max(0, Date.parse(raHeader) - Date.now()) : Number(raHeader) * 1000) : 0;
+        throw classify(status, detail, raMs);
+      }
+      if (body === null) throw new ApiError('server', 'Empty or non-JSON response.', status);
       return body;
     } catch (e) {
       if (e instanceof ApiError) throw e;
       if (state.aborted) throw new AbortedError();
-      if (timedOut) throw new ApiError('timeout', `Request timed out after ${Math.round(CONFIG.REQUEST_TIMEOUT_MS / 1000)}s.`);
-      if (csp) throw new ApiError('blocked', `This page's Content-Security-Policy (${csp}) blocks ${host}. QuizPilot can't call the AI from this page.`);
+      if (cancelled) throw new ApiError('cancelled', 'cancelled');
+      if (timedOut) throw new ApiError('timeout', `No reply within ${Math.round(timeoutMs / 1000)}s.`);
+      if (csp) throw new ApiError('blocked', `This page's security policy blocks ${host}; the AI can't be reached from this page.`);
+      // An older relay rejects the envelope header in the CORS preflight: retry once without it.
+      if (usedEnvelope && !net.envelopeWorked) { net.envelope = false; debug('Relay has no envelope support; continuing without it.'); return httpJson(provider, key, path, method, bodyObj, opts); }
       throw new ApiError('network', relay()
         ? `Could not reach the relay (${host}). Check RELAY_URL and that the Cloudflare worker is deployed.`
-        : 'The request was blocked before a response arrived (usually CORS). Set RELAY_URL to your Cloudflare relay.');
+        : 'The request was blocked before a response arrived (CORS). Set RELAY_URL to your Cloudflare relay.');
     } finally {
       clearTimeout(timer);
       state.controllers.delete(ctl);
+      if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
       document.removeEventListener('securitypolicyviolation', onCsp);
     }
   }
 
   /* =========================================================================
-   * 11. MODEL SELECTION
+   * 11. MODEL SCOUT: find the models that actually work fast for this key
    * ======================================================================= */
-  const NON_CHAT_RE = /(embed|rerank|retriev|guard|safety|reward|shield|clip\b|parse|ocr|asr|whisper|tts|speech|audio|realtime|transcri|riva|flux|sdxl|stable-diffusion|diffusion|dall-e|image|imagen|veo|video|cosmos|paligemma|kosmos|deplot|neva|vila\b|fuyu|detector|segment|pii|moderation|bge|e5-|arctic-embed|grounding|coder|codestral|starcoder|codegemma|codellama|code-llama|usdcode|bert|gliner|topic-control|content-safety|translate|search-preview|computer-use|babbage|davinci|instruct-0914|aqa|learnlm|genmol|molmim|diffdock|esm|alphafold|openfold|proteinmpnn|rfdiffusion|evo2|maisi|trellis|edify|ising|deep-research|-tts|native-audio|live)/i;
-  function rankModels(provider, ids) {
+  const NON_CHAT_RE = /(embed|rerank|retriev|guard|safety|reward|shield|clip\b|parse|ocr|asr|whisper|tts|speech|audio|realtime|transcri|riva|flux|sdxl|stable-diffusion|diffusion|dall-e|imagen|veo|video|cosmos|paligemma|kosmos|deplot|neva|vila\b|fuyu|detector|segment|pii|moderation|bge|e5-|arctic-embed|grounding|coder|codestral|starcoder|codegemma|codellama|code-llama|usdcode|bert|gliner|topic-control|content-safety|translate|search-preview|computer-use|babbage|davinci|aqa|learnlm|genmol|molmim|diffdock|esm|alphafold|openfold|proteinmpnn|rfdiffusion|evo2|maisi|trellis|edify|ising|deep-research|-tts|native-audio|\blive\b|image-gen|nemoretriever|calibrat|streampetr|bevformer|sparsedrive|vista|fourcastnet|corrdiff|-base$|reward)/i;
+  const VISION_RE = /(vision|-vl\b|vl-|\bvl\b|multimodal|omni|llama-4|gemma-3|pixtral|phi-4-multimodal|phi-3\.5-vision|nemotron.*vl|qwen.*vl|llava|molmo|gpt-4o|gpt-4\.1|gemini|claude)/i;
+  const THINK_RE = /(\br1\b|-r1|reason|think|qwq|\bo1\b|\bo3\b|\bo4\b|^o\d|magistral|deepseek-v3\.1-terminus|kimi-k2-thinking|-thinking|nemotron.*ultra|nemotron.*super)/i;
+
+  function sizeOf(id) { const m = String(id).toLowerCase().match(/(\d+(?:\.\d+)?)b\b/); return m ? parseFloat(m[1]) : 0; }
+  function rankModels(provider, ids, vision) {
     const p = PROVIDERS[provider];
     const pref = (FAST ? p.fast : p.accurate).map(x => x.toLowerCase());
-    return ids.map(id => String(id).replace(/^models\//, '')).filter((id, i, a) => id && a.indexOf(id) === i && !NON_CHAT_RE.test(id)).map(id => {
-      const l = id.toLowerCase();
-      let s = 0;
-      const pi = pref.indexOf(l);
-      if (pi >= 0) s += 1000 - pi * 10;
-      if (/instruct|chat|-it\b|turbo|versatile|latest/.test(l)) s += 20;
-      const thinking = /\br1\b|-r1|reason|thinking|qwq|\bo1\b|\bo3\b|\bo4\b|^o\d/.test(l);
-      if (FAST) {
-        if (/mini|flash|lite|instant|haiku|small|nano|fast|8b|turbo/.test(l)) s += 40;
-        if (/pro\b|opus|large|405b|ultra/.test(l)) s -= 30;
-        if (thinking) s -= 80;
-      } else {
-        if (/pro\b|sonnet|opus|large|70b|72b|120b|gpt-4\.1$|gpt-4o$/.test(l)) s += 40;
-        if (thinking) s -= 20;
-      }
-      if (/preview|exp\b|experimental|\d{4}-\d{2}-\d{2}|-\d{4}$/.test(l)) s -= 10;
-      if (/vision|-vl\b|vl-/.test(l)) s -= 20;
-      return { id, s };
-    }).sort((a, b) => b.s - a.s).map(x => x.id);
+    return ids.map(id => String(id).replace(/^models\//, '')).filter((id, i, a) => id && a.indexOf(id) === i && !NON_CHAT_RE.test(id))
+      .filter(id => (vision ? VISION_RE.test(id) : true))
+      .map(id => {
+        const l = id.toLowerCase();
+        let s = 0;
+        const pi = pref.indexOf(l);
+        if (pi >= 0) s += 300 - pi * 10;
+        if (/instruct|chat|-it\b|turbo|versatile/.test(l)) s += 40;
+        if (THINK_RE.test(l)) s -= 120;
+        if (/flash|lite|mini|nano|instant|fast/.test(l) && !/minimax/.test(l)) s += FAST ? 10 : -10;
+        const b = sizeOf(l);
+        if (b) { s += Math.min(b, 120) / 2; if (b < 7) s -= 40; if (b > 300) s -= 30; }
+        if (/llama-3\.3-70b|llama-3\.1-70b|llama-4-maverick|qwen2\.5-72b|qwen3-.*-instruct|mistral-large|mixtral|gemma-3-27b|deepseek-v3|kimi-k2-instruct|gpt-oss-120b/.test(l)) s += 60;
+        if (!vision && VISION_RE.test(l) && !/llama-4|gemma-3|gpt|gemini|claude/.test(l)) s -= 40;
+        if (/preview|exp\b|experimental|beta/.test(l)) s -= 15;
+        return { id, s };
+      }).sort((a, b) => b.s - a.s).map(x => x.id);
   }
 
   async function listModels(provider, key) {
-    const body = await httpJson(provider, key, '/models', 'GET');
+    const body = await httpJson(provider, key, '/models', 'GET', null, { timeoutMs: 15000 });
     const data = Array.isArray(body && body.data) ? body.data : Array.isArray(body && body.models) ? body.models : Array.isArray(body) ? body : [];
     return data.map(m => (m && (m.id || m.name)) || '').filter(Boolean);
   }
 
-  /**
-   * Builds the ordered list of {provider, key, model} candidates.
-   * Fast path: if the key's provider is certain, its preferred models are used without
-   * a model-list round trip; the list is only fetched if those models fail.
-   */
   async function resolveKeys(keys) {
     const resolved = [];
     for (let i = 0; i < keys.length; i++) {
       const g = guessProviders(keys[i]);
       SECRETS.push(g.key);
-      let provider = null;
-      let discovered = null;
+      let provider = null, discovered = null;
       if (g.candidates.length === 1) provider = g.candidates[0];
       else {
         for (const c of g.candidates) {
@@ -968,25 +1010,87 @@ void (async function QuizPilot2() {
           catch (e) {
             if (e instanceof AbortedError) throw e;
             if (e.kind === 'network' || e.kind === 'blocked' || e.kind === 'relay') throw new StopError(e.message);
-            debug(`Key ${i + 1} is not a ${PROVIDERS[c].name} key (${e.message})`);
           }
         }
-        if (!provider) { warn(`Key ${i + 1}: could not match it to any provider. Prefix it like 'groq:...' to force one. Skipping it.`); continue; }
+        if (!provider) { warn(`Key ${i + 1} doesn't match any supported AI service. Skipping it.`); continue; }
       }
       resolved.push({ index: i + 1, provider, key: g.key, discovered });
     }
     return resolved;
   }
 
-  function candidatesFor(entry, isFirst) {
+  // Remember which models worked well on this site for a few hours.
+  const SCOUT_CACHE_MS = 6 * 3600 * 1000;
+  function cacheKeyFor(entry, vision) { return 'quizpilot3:' + entry.provider + ':' + (vision ? 'v' : 't') + ':' + entry.key.slice(-6); }
+  function loadScout(entry, vision) {
+    try { const v = JSON.parse(localStorage.getItem(cacheKeyFor(entry, vision)) || 'null'); if (v && Date.now() - v.at < SCOUT_CACHE_MS && Array.isArray(v.models) && v.models.length) return v.models; } catch (_) { /* ignore */ }
+    return null;
+  }
+  function saveScout(entry, vision, models) { try { localStorage.setItem(cacheKeyFor(entry, vision), JSON.stringify({ at: Date.now(), models })); } catch (_) { /* ignore */ } }
+
+  /** Sends a tiny test question to a model. Resolves with latency (ms) or null. */
+  async function probe(entry, model) {
+    const t0 = performance.now();
     const p = PROVIDERS[entry.provider];
-    let models = entry.discovered ? rankModels(entry.provider, entry.discovered) : (FAST ? p.fast : p.accurate).slice();
-    if (isFirst && norm(CONFIG.MODEL)) models = [norm(CONFIG.MODEL), ...models.filter(m => m !== norm(CONFIG.MODEL))];
-    return models.slice(0, Math.max(1, CONFIG.MAX_MODELS_PER_KEY)).map(model => ({ provider: entry.provider, key: entry.key, keyIndex: entry.index, model, discoveredList: !!entry.discovered }));
+    const prompt = 'Reply with ONLY this JSON, filling in the number: {"ok":true,"sum":<2+3>}';
+    try {
+      let content = '';
+      if (p.kind === 'anthropic') {
+        const r = await httpJson(entry.provider, entry.key, '/messages', 'POST', { model, max_tokens: 30, messages: [{ role: 'user', content: prompt }] }, { timeoutMs: 12000 });
+        content = Array.isArray(r && r.content) ? r.content.map(c => c.text || '').join('') : '';
+      } else {
+        const r = await httpJson(entry.provider, entry.key, '/chat/completions', 'POST', { model, messages: [{ role: 'user', content: prompt }], temperature: 0, max_tokens: 40, stream: false }, { timeoutMs: 12000 });
+        const ch = r && r.choices && r.choices[0];
+        content = ch && ch.message && typeof ch.message.content === 'string' ? ch.message.content : '';
+      }
+      const j = extractJson(content);
+      if (j && (Number(j.sum) === 5 || j.ok === true)) return performance.now() - t0;
+      return null;
+    } catch (e) {
+      if (e instanceof AbortedError) throw e;
+      if (e.kind === 'auth' || e.kind === 'quota' || e.kind === 'network' || e.kind === 'blocked' || e.kind === 'relay') throw e;
+      return null;
+    }
+  }
+
+  /**
+   * Returns working models for one key, fastest-and-strongest first.
+   * Tests up to 8 candidates in parallel with a tiny question; slow "thinking"
+   * models, retired models and models your account can't use drop out here.
+   */
+  async function scout(entry, vision) {
+    const cached = loadScout(entry, vision);
+    if (cached) return cached;
+    const p = PROVIDERS[entry.provider];
+    let ids = entry.discovered;
+    if (!ids && (p.alwaysDiscover || !p.noModels)) {
+      try { ids = await listModels(entry.provider, entry.key); entry.discovered = ids; }
+      catch (e) { if (e instanceof AbortedError) throw e; if (['auth', 'quota', 'network', 'blocked', 'relay'].includes(e.kind)) throw e; ids = null; }
+    }
+    const ranked = rankModels(entry.provider, (ids && ids.length ? ids : (FAST ? p.fast : p.accurate)).concat(ids ? [] : []), vision);
+    const pool = ranked.slice(0, vision ? 5 : 8);
+    if (!pool.length) return [];
+    // Finish early: once 2 models passed, give the rest only a short grace period.
+    const results = await new Promise((resolve, reject) => {
+      const out = [];
+      let ok = 0, settled = 0, done = false, grace = null;
+      const finish = () => { if (!done) { done = true; clearTimeout(grace); resolve(out.slice()); } };
+      pool.forEach(m => probe(entry, m).then(ms => {
+        out.push({ m, ms }); settled++;
+        if (ms !== null && ++ok === 2) grace = setTimeout(finish, 1500);
+        if (settled === pool.length) finish();
+      }, e => { if (!done) { done = true; clearTimeout(grace); reject(e); } }));
+    });
+    const working = results.filter(r => r.ms !== null)
+      .map(r => ({ m: r.m, score: r.ms - Math.min(sizeOf(r.m) || 30, 120) * (FAST ? 25 : 60) + pool.indexOf(r.m) * 150 }))
+      .sort((a, b) => a.score - b.score).map(r => r.m);
+    debug(`Scout (${vision ? 'vision' : 'text'}): ${working.length}/${pool.length} usable`);
+    if (working.length) saveScout(entry, vision, working);
+    return working.length ? working : (vision ? [] : ranked.slice(0, 4)); // if every probe was unlucky, still try the best-ranked
   }
 
   /* =========================================================================
-   * 12. PROMPT + RESPONSE PARSING
+   * 13. PROMPT + RESPONSE PARSING
    * ======================================================================= */
   const SYSTEM_PROMPT = [
     'You answer questions from a practice quiz or form. Input is JSON with a "questions" array.',
@@ -1000,6 +1104,7 @@ void (async function QuizPilot2() {
     '5. If a question asks about the respondent themself (their details, opinions, feelings, preferences, experiences, ratings, feedback) it has no correct answer: set "personal": true, "answer": [], "answer_text": [], confidence 0.',
     EXPLAIN ? '6. "explanation": one short sentence.' : '6. Do not include explanations.',
     '7. Include every question_id exactly once.',
+    '8. Some questions or options refer to attached images by name (e.g. "img1"). Look at those images carefully; if an image you need is missing or unreadable, set "uncertain": true.',
     'Reply with ONLY a JSON object:',
     EXPLAIN
       ? '{"answers":[{"question_id":"q1","answer":["B"],"answer_text":["exact option text"],"confidence":0.9,"uncertain":false,"personal":false,"explanation":"..."}]}'
@@ -1008,7 +1113,8 @@ void (async function QuizPilot2() {
 
   function questionPayload(q) {
     const p = { question_id: q.id, type: q.type, question: q.text };
-    if (q.options.length) p.options = q.options.map(o => ({ id: o.id, text: truncate(o.text, 400) }));
+    if (q.options.length) p.options = q.options.map(o => (o.imageRef ? { id: o.id, text: truncate(o.text, 400), image: o.imageRef } : { id: o.id, text: truncate(o.text, 400) }));
+    if (q.imageRefs && q.imageRefs.length) p.images = q.imageRefs.slice();
     if (q.type === 'number') { const el = q.els[0]; if (el.min !== '') p.min = el.min; if (el.max !== '') p.max = el.max; }
     if ((q.type === 'short_text' || q.type === 'long_text') && q.els[0].maxLength > 0) p.max_length = q.els[0].maxLength;
     return p;
@@ -1094,36 +1200,56 @@ void (async function QuizPilot2() {
   }
 
   /* =========================================================================
-   * 13. CALLING MODELS: adaptive params, retries, key/model fallback, parallel batches
+   * 14. ASKING THE AI: adaptive requests, backup requests, splitting, recovery
    * ======================================================================= */
-  const paramFlags = new Map();   // provider|model -> { noTemp, maxField, noJson, noThink }
+  const paramFlags = new Map();   // provider|model -> { noTemp, maxField, noJson, noThink, imgInline }
 
-  async function callModel(cand, batch, note) {
+  function buildUserContent(cand, text, images, f) {
+    const p = PROVIDERS[cand.provider];
+    if (!images.length) return text;
+    if (p.kind === 'anthropic') {
+      const parts = [{ type: 'text', text }];
+      for (const im of images) {
+        const m = im.data.match(/^data:([^;]+);base64,(.*)$/);
+        if (!m) continue;
+        parts.push({ type: 'text', text: `Image ${im.ref}:` }, { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } });
+      }
+      return parts;
+    }
+    if (f.imgInline) return text + images.map(im => `\nImage ${im.ref}: <img src="${im.data}" />`).join('');
+    const parts = [{ type: 'text', text }];
+    for (const im of images) parts.push({ type: 'text', text: `Image ${im.ref}:` }, { type: 'image_url', image_url: { url: im.data } });
+    return parts;
+  }
+
+  async function callModel(cand, batch, note, signal, images) {
     const p = PROVIDERS[cand.provider];
     const fk = cand.provider + '|' + cand.model;
     const f = paramFlags.get(fk) || {};
     paramFlags.set(fk, f);
-    const user = (note ? note + '\n' : '') + JSON.stringify({ questions: batch.map(questionPayload) });
+    const text = (note ? note + '\n' : '') + JSON.stringify({ questions: batch.map(questionPayload) });
     const maxTokens = Math.min(CONFIG.MAX_TOKENS, 400 + batch.length * (EXPLAIN ? 170 : 100));
-    for (let fix = 0; fix < 5; fix++) {
+    const timeoutMs = Math.min(CONFIG.MAX_REQUEST_MS, 15000 + batch.length * 2500 + images.length * 6000);
+    for (let fix = 0; fix < 6; fix++) {
       try {
+        const content = buildUserContent(cand, text, images, f);
         if (p.kind === 'anthropic') {
-          const body = { model: cand.model, max_tokens: maxTokens, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: user }] };
+          const body = { model: cand.model, max_tokens: maxTokens, system: SYSTEM_PROMPT, messages: [{ role: 'user', content }] };
           if (!f.noTemp) body.temperature = 0;
-          const r = await httpJson(cand.provider, cand.key, '/messages', 'POST', body);
-          const content = Array.isArray(r && r.content) ? r.content.filter(c => c && c.type === 'text').map(c => c.text || '').join('') : '';
-          return { content, finish: r && r.stop_reason === 'max_tokens' ? 'length' : (r && r.stop_reason) };
+          const r = await httpJson(cand.provider, cand.key, '/messages', 'POST', body, { signal, timeoutMs });
+          const out = Array.isArray(r && r.content) ? r.content.filter(c => c && c.type === 'text').map(c => c.text || '').join('') : '';
+          return { content: out, finish: r && r.stop_reason === 'max_tokens' ? 'length' : (r && r.stop_reason) };
         }
-        const body = { model: cand.model, messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: user }], stream: false };
+        const body = { model: cand.model, messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content }], stream: false };
         if (!f.noTemp) body.temperature = 0;
         body[f.maxField || 'max_tokens'] = maxTokens;
-        if (p.json && !f.noJson) body.response_format = { type: 'json_object' };
+        if (p.json && !f.noJson && !images.length) body.response_format = { type: 'json_object' };
         if (p.noThink && FAST && !f.noThink) body.reasoning_effort = 'none';
-        const r = await httpJson(cand.provider, cand.key, '/chat/completions', 'POST', body);
+        const r = await httpJson(cand.provider, cand.key, '/chat/completions', 'POST', body, { signal, timeoutMs });
         const ch = r && Array.isArray(r.choices) ? r.choices[0] : null;
         const msg = ch && ch.message;
-        const content = msg ? (typeof msg.content === 'string' ? msg.content : Array.isArray(msg.content) ? msg.content.map(x => x.text || '').join('') : '') : '';
-        return { content: content || '', finish: ch ? ch.finish_reason : null };
+        const out = msg ? (typeof msg.content === 'string' ? msg.content : Array.isArray(msg.content) ? msg.content.map(x => x.text || '').join('') : '') : '';
+        return { content: out || '', finish: ch ? ch.finish_reason : null };
       } catch (e) {
         if (!(e instanceof ApiError) || e.kind !== 'bad_request') throw e;
         const m = e.message;
@@ -1132,147 +1258,207 @@ void (async function QuizPilot2() {
         else if (/temperature/i.test(m) && !f.noTemp) { f.noTemp = true; changed = true; }
         else if (/response_format|json_object|json mode|json_schema/i.test(m) && !f.noJson && p.json) { f.noJson = true; changed = true; }
         else if (/reasoning/i.test(m) && !f.noThink && p.noThink) { f.noThink = true; changed = true; }
+        else if (images.length && !f.imgInline && p.kind !== 'anthropic' && /image|content|array|string|multimodal|type/i.test(m)) { f.imgInline = true; changed = true; }
         if (!changed) throw e;
-        debug(`Adjusting request for ${cand.model}: ${m}`);
+        debug('Adjusting request format: ' + m);
       }
     }
-    throw new ApiError('bad_request', 'Request format not accepted by ' + cand.model);
+    throw new ApiError('bad_request', 'Request format not accepted.');
   }
 
-  const backoffMs = (attempt, hint) => Math.min(20000, Math.max(hint || 0, 700 * Math.pow(2, attempt)) + Math.floor(Math.random() * 300));
-
-  async function answerWithCandidate(cand, batch) {
+  async function answerWithCandidate(cand, batch, signal, images) {
     let note = '';
     let bad = 0;
-    for (let attempt = 0; attempt <= CONFIG.MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       checkAbort();
-      try {
-        const { content, finish } = await callModel(cand, batch, note);
-        const parsed = extractJson(content);
-        if (!parsed) {
-          if (finish === 'length') throw new ApiError('truncated', 'Reply was cut off by the token limit.');
-          if (++bad >= 2) throw new ApiError('model', 'Model kept returning invalid JSON.');
-          note = 'IMPORTANT: your previous reply was not valid JSON. Reply with ONLY the JSON object.';
-          continue;
-        }
-        const v = validateAnswers(parsed, batch);
-        if (!v.valid) {
-          if (++bad >= 2) throw new ApiError('model', 'Model kept returning JSON without "answers".');
-          note = 'IMPORTANT: reply with a JSON object {"answers":[...]} only.';
-          continue;
-        }
-        v.problems.forEach(pr => debug(pr));
-        return v;
-      } catch (e) {
-        if (!(e instanceof ApiError)) throw e;
-        if (!['rate', 'server', 'timeout'].includes(e.kind)) throw e;
-        if (attempt >= CONFIG.MAX_RETRIES) throw e;
-        // a different key/model is usually faster than waiting out a long rate limit
-        if (e.kind === 'rate' && e.retryAfterMs > 8000) throw e;
-        const wait = backoffMs(attempt, e.retryAfterMs);
-        debug(`${e.message} Retrying ${cand.model} in ${(wait / 1000).toFixed(1)}s`);
-        await sleep(wait);
+      const { content, finish } = await callModel(cand, batch, note, signal, images);
+      const parsed = extractJson(content);
+      if (!parsed) {
+        if (finish === 'length') throw new ApiError('truncated', 'Reply was cut off.');
+        if (++bad >= 2) throw new ApiError('model', 'Kept replying without valid JSON.');
+        note = 'IMPORTANT: your previous reply was not valid JSON. Reply with ONLY the JSON object.';
+        continue;
       }
+      const v = validateAnswers(parsed, batch);
+      if (!v.valid) {
+        if (++bad >= 2) throw new ApiError('model', 'Kept replying without an "answers" list.');
+        note = 'IMPORTANT: reply with a JSON object {"answers":[...]} only.';
+        continue;
+      }
+      v.problems.forEach(pr => debug(pr));
+      return v;
     }
-    throw new ApiError('model', 'No usable response.');
+    throw new ApiError('model', 'No usable reply.');
   }
 
-  const candLabel = (c) => `${PROVIDERS[c.provider].name} \u00B7 ${c.model}` + (c.keyIndex > 1 ? ` (key ${c.keyIndex})` : '');
-
-  async function discoverFor(ctx, cand) {
-    const dk = cand.provider + '|' + cand.key;
-    if (ctx.discovered.has(dk) || PROVIDERS[cand.provider].noModels) return;
-    ctx.discovered.add(dk);
-    try {
-      const ids = rankModels(cand.provider, await listModels(cand.provider, cand.key));
-      const existing = new Set(ctx.cands.filter(c => c.key === cand.key).map(c => c.model));
-      const extra = ids.filter(id => !existing.has(id)).slice(0, CONFIG.MAX_MODELS_PER_KEY + 1)
-        .map(model => ({ provider: cand.provider, key: cand.key, keyIndex: cand.keyIndex, model, discoveredList: true }));
-      const lastOfKey = ctx.cands.map(c => c.key).lastIndexOf(cand.key);
-      ctx.cands.splice(lastOfKey + 1, 0, ...extra);
-      if (extra.length) debug('Discovered models: ' + extra.map(c => c.model).join(', '));
-    } catch (e) {
-      if (e instanceof AbortedError) throw e;
-      debug('Model list failed: ' + e.message);
+  /** Marks what a failure means for that model/key. Returns 'split' when the batch should be split. */
+  function noteFailure(ctx, cand, e, batchLen) {
+    if (!(e instanceof ApiError)) throw e;
+    if (e.kind === 'cancelled') return null;
+    if (['network', 'blocked', 'relay'].includes(e.kind)) throw new StopError(e.message);
+    debug(`AI attempt failed (${e.kind}): ${e.message}`);
+    if (e.kind === 'auth' || e.kind === 'quota') {
+      if (!ctx.deadKeys.has(cand.key)) warn(`Key ${cand.keyIndex} was rejected or is out of credits; using your other key(s) if any.`);
+      ctx.deadKeys.add(cand.key);
+      return null;
     }
+    if (e.kind === 'model' || e.kind === 'bad_request') { cand.dead = true; return null; }
+    if (e.kind === 'truncated') { if (batchLen > 1) return 'split'; cand.dead = true; return null; }
+    if (e.kind === 'timeout') {
+      cand.slow = (cand.slow || 0) + 1;
+      if (cand.slow >= 2) cand.dead = true;
+      [ctx.cands, ctx.vision].forEach(pool => { const i = pool.indexOf(cand); if (i >= 0) { pool.splice(i, 1); pool.push(cand); } });
+      return batchLen > 2 ? 'split' : null;
+    }
+    if (e.kind === 'rate' || e.kind === 'server') { cand.coolUntil = Date.now() + Math.max(3000, Math.min(e.retryAfterMs || 0, 20000)); return null; }
+    return null;
   }
 
-  async function answerBatch(batch, ctx) {
-    let lastErr = null;
-    for (let i = 0; i < ctx.cands.length; i++) {
+  function promote(pool, cand) {
+    const i = pool.indexOf(cand);
+    if (i > 0) { pool.splice(i, 1); pool.unshift(cand); }
+  }
+
+  /**
+   * Answers one batch. Uses the best model; if it is slow, a second model is asked
+   * in parallel (HEDGE_AFTER_MS) and whichever answers first wins.
+   */
+  async function answerBatch(batch, ctx, kind) {
+    const imagesFor = (b) => (kind === 'vision' ? b.flatMap(q => ctx.images.get(q.id) || []) : []);
+    for (let round = 0; round < 4; round++) {
       checkAbort();
-      const cand = ctx.cands[(ctx.current + i) % ctx.cands.length];
-      if (ctx.dead.has(cand) || ctx.deadKeys.has(cand.key)) continue;
-      try {
-        const v = await answerWithCandidate(cand, batch);
-        const idx = ctx.cands.indexOf(cand);
-        if (ctx.current !== idx || !ctx.announced) {
-          ctx.current = idx;
-          log((ctx.announced ? 'Switched to: ' : 'Using: ') + candLabel(cand));
-          ctx.announced = true;
-        }
-        return v;
-      } catch (e) {
-        if (e instanceof AbortedError) throw e;
-        if (!(e instanceof ApiError)) throw e;
-        lastErr = e;
-        if (e.kind === 'network' || e.kind === 'blocked' || e.kind === 'relay') throw new StopError(e.message);
-        if (e.kind === 'truncated' && batch.length > 1) {
-          const mid = Math.ceil(batch.length / 2);
-          debug(`Reply truncated; splitting ${batch.length} questions.`);
-          const a = await answerBatch(batch.slice(0, mid), ctx);
-          const b = await answerBatch(batch.slice(mid), ctx);
-          b.result.forEach((val, k) => a.result.set(k, val));
-          return { result: a.result, problems: [], missing: [], valid: true };
-        }
-        if (e.kind === 'auth' || e.kind === 'quota') {
-          if (!ctx.deadKeys.has(cand.key)) warn(`Key ${cand.keyIndex} (${PROVIDERS[cand.provider].name}): ${e.message} - trying the next key/model.`);
-          ctx.deadKeys.add(cand.key);
-          continue;
-        }
-        if (e.kind === 'model' || e.kind === 'bad_request') {
-          ctx.dead.add(cand);
-          debug(`${candLabel(cand)} failed: ${e.message}`);
-          if (!cand.discoveredList) await discoverFor(ctx, cand);
-          continue;
-        }
-        warn(`${candLabel(cand)}: ${e.message} - trying another model.`);
+      const pool = kind === 'vision' ? ctx.vision : ctx.cands;
+      const now = Date.now();
+      const usable = pool.filter(c => !c.dead && !ctx.deadKeys.has(c.key) && !(c.coolUntil > now));
+      if (!usable.length) {
+        const cooling = pool.filter(c => !c.dead && !ctx.deadKeys.has(c.key));
+        if (cooling.length) { await sleep(Math.min(8000, Math.max(800, Math.min(...cooling.map(c => (c.coolUntil || 0) - now))))); continue; }
+        if (await ctx.rescout(kind)) continue;
+        break;
       }
+      const images = imagesFor(batch);
+      const [primary, backup] = usable;
+      const ac1 = new AbortController(), ac2 = new AbortController();
+      const run = (cand, ac) => answerWithCandidate(cand, batch, ac.signal, images).then(v => ({ ok: true, v, cand }), e => ({ ok: false, e, cand }));
+      const p1 = run(primary, ac1);
+      let hedgeTimer = null;
+      const hedge = backup ? new Promise(res => { hedgeTimer = setTimeout(() => res('hedge'), CONFIG.HEDGE_AFTER_MS); }) : new Promise(() => {});
+      let first = await Promise.race([p1, hedge]);
+      let pending = [];
+      if (first === 'hedge') {
+        debug('First answer is slow; asking a backup in parallel.');
+        const p2 = run(backup, ac2);
+        first = await Promise.race([p1, p2]);
+        pending = [first.cand === primary ? p2 : p1];
+        if (!first.ok) {
+          const other = await pending[0];
+          pending = [];
+          const s = noteFailure(ctx, first.cand, first.e, batch.length);
+          if (other.ok) { first = other; } else {
+            const s2 = noteFailure(ctx, other.cand, other.e, batch.length);
+            if ((s === 'split' || s2 === 'split') && batch.length > 1) return splitAndAnswer(batch, ctx, kind);
+            continue;
+          }
+        }
+      }
+      clearTimeout(hedgeTimer);
+      if (first.ok) {
+        (first.cand === primary ? ac2 : ac1).abort();
+        pending.forEach(p => p.then(() => {}, () => {}));
+        promote(pool, first.cand);
+        if (!ctx.announced) { ctx.announced = true; log('AI connected.'); }
+        return first.v;
+      }
+      const s = noteFailure(ctx, first.cand, first.e, batch.length);
+      if (s === 'split' && batch.length > 1) return splitAndAnswer(batch, ctx, kind);
     }
-    throw new StopError('Every key/model failed. Last error: ' + (lastErr ? lastErr.message : 'none available'));
+    throw new StopError(kind === 'vision' ? 'No image-capable AI model is available right now.' : 'The AI service is not responding right now. Try again in a minute.');
   }
 
-  /** Sends batches in parallel; onAnswer(q, answer) is awaited for each answer as soon as its batch returns. */
-  async function runBatches(questions, ctx, onAnswer) {
-    const size = Math.max(1, CONFIG.QUESTIONS_PER_REQUEST);
+  async function splitAndAnswer(batch, ctx, kind) {
+    const mid = Math.ceil(batch.length / 2);
+    debug(`Splitting a batch of ${batch.length}.`);
+    const [a, b] = await Promise.all([answerBatch(batch.slice(0, mid), ctx, kind), answerBatch(batch.slice(mid), ctx, kind)]);
+    b.result.forEach((val, k) => a.result.set(k, val));
+    return { result: a.result, problems: [], missing: [], valid: true };
+  }
+
+  /** Sends batches in parallel; onAnswer(q, answer) runs as soon as each answer arrives. */
+  async function runBatches(questions, ctx, kind, onAnswer) {
+    const size = kind === 'vision' ? 2 : Math.max(1, CONFIG.QUESTIONS_PER_REQUEST);
     const queue = [];
     for (let i = 0; i < questions.length; i += size) queue.push(questions.slice(i, i + size));
     const got = new Map();
     let fatal = null;
+    const deliver = async (list, v) => { for (const q of list) if (v.result.has(q.id) && !got.has(q.id)) { got.set(q.id, v.result.get(q.id)); await onAnswer(q, v.result.get(q.id)); } };
     const worker = async () => {
-      while (queue.length && !fatal && !state.aborted) {
+      while (queue.length && !state.aborted) {
         const batch = queue.shift();
-        try {
-          const v = await answerBatch(batch, ctx);
-          for (const q of batch) if (v.result.has(q.id) && !got.has(q.id)) { got.set(q.id, v.result.get(q.id)); await onAnswer(q, v.result.get(q.id)); }
-        } catch (e) {
-          if (e instanceof AbortedError) { fatal = e; return; }
-          fatal = e instanceof StopError ? e : new StopError(scrub(e));
-        }
+        try { await deliver(batch, await answerBatch(batch, ctx, kind)); }
+        catch (e) { if (e instanceof AbortedError) { fatal = e; return; } fatal = e instanceof StopError ? e : new StopError(scrub(e)); if (/relay|reach/i.test(fatal.message)) return; }
       }
     };
-    const n = Math.min(Math.max(1, CONFIG.PARALLEL_REQUESTS), queue.length);
-    await Promise.all(Array.from({ length: n }, worker));
+    await Promise.all(Array.from({ length: Math.min(Math.max(1, CONFIG.PARALLEL_REQUESTS), queue.length) }, worker));
     if (fatal instanceof AbortedError) throw fatal;
-    // anything the model skipped gets one more (single) request
+    // Second chance for anything still unanswered (one by one, any working model)
     const missing = questions.filter(q => !got.has(q.id));
-    if (!fatal && missing.length) {
-      try {
-        const v = await answerBatch(missing, ctx);
-        for (const q of missing) if (v.result.has(q.id) && !got.has(q.id)) { got.set(q.id, v.result.get(q.id)); await onAnswer(q, v.result.get(q.id)); }
-      } catch (e) { if (e instanceof AbortedError) throw e; fatal = e; }
+    for (const q of missing) {
+      if (state.aborted) break;
+      try { await deliver([q], await answerBatch([q], ctx, kind)); fatal = null; }
+      catch (e) { if (e instanceof AbortedError) throw e; fatal = e instanceof StopError ? e : new StopError(scrub(e)); if (/relay|reach/i.test(fatal.message)) break; }
     }
     return { got, fatal };
+  }
+
+  /* =========================================================================
+   * 14b. IMAGES (for questions with pictures)
+   * ======================================================================= */
+  async function imageToDataUrl(img) {
+    try {
+      if (!img.complete) await new Promise(r => { img.addEventListener('load', r, { once: true }); img.addEventListener('error', r, { once: true }); setTimeout(r, 4000); });
+    } catch (_) { /* ignore */ }
+    const w = img.naturalWidth, h = img.naturalHeight;
+    if (!w || !h) return null;
+    const scale = Math.min(1, 896 / Math.max(w, h));
+    const draw = (src) => {
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(w * scale)); c.height = Math.max(1, Math.round(h * scale));
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(src, 0, 0, c.width, c.height);
+      let q = 0.85, d = c.toDataURL('image/jpeg', q);
+      while (d.length > 170000 && q > 0.35) { q -= 0.15; d = c.toDataURL('image/jpeg', q); }
+      return d;
+    };
+    try { return draw(img); } catch (_) { /* cross-site image: try fetching it */ }
+    try {
+      const r = await fetch(img.currentSrc || img.src, { mode: 'cors', credentials: 'omit' });
+      if (!r.ok) return null;
+      const bmp = await createImageBitmap(await r.blob());
+      return draw(bmp);
+    } catch (_) { return null; }
+  }
+
+  /** Reads the pictures of the given questions. Returns how many could not be read. */
+  async function prepareImages(qs, ctx) {
+    let unreadable = 0;
+    let n = ctx.imgCounter || 0;
+    await Promise.all(qs.map(async (q) => {
+      const list = [];
+      q.imageRefs = [];
+      for (const im of q.images) {
+        const data = await imageToDataUrl(im.el);
+        if (!data) { unreadable++; continue; }
+        const ref = 'img' + (++n);
+        list.push({ ref, data });
+        if (im.opt) { const o = q.options.find(x => x.id === im.opt); if (o) o.imageRef = ref; }
+        else q.imageRefs.push(ref);
+      }
+      ctx.images.set(q.id, list);
+      q.imagesOk = list.length === q.images.length;
+    }));
+    ctx.imgCounter = n;
+    return unreadable;
   }
 
   /* =========================================================================
@@ -1604,12 +1790,32 @@ void (async function QuizPilot2() {
 
       if (toAsk.length) {
         if (first) log(`Analyzing ${toAsk.length} question${toAsk.length === 1 ? '' : 's'}...`);
-        const { got, fatal } = await runBatches(toAsk, ctx, async (q, a) => {
-          if (CONFIG.CACHE_ANSWERS && !a.conflict) answerCache.set(q.cacheKey, a);
+        const picMissing = (q) => q.images && q.images.length && !q.imagesOk;
+        const onAnswer = async (q, a) => {
+          if (picMissing(q) && !a.personal) { a.uncertain = true; a.confidence = Math.min(a.confidence, 0.5); }
+          if (CONFIG.CACHE_ANSWERS && !a.conflict && !picMissing(q)) answerCache.set(q.cacheKey, a);
           const row = mkRow(q, a); rows.set(q.id, row);
           await fillOne(q, a, row, det);
+          if (picMissing(q) && row.status === 'UNCERTAIN') row.note = 'The picture could not be read, so this was not filled. ' + row.note;
           done(row);
-        });
+        };
+        const imgQs = CONFIG.SOLVE_IMAGES ? toAsk.filter(q => q.images && q.images.length) : [];
+        const textQs = toAsk.filter(q => !imgQs.includes(q));
+        const got = new Map();
+        let fatal = null;
+        const jobs = [];
+        if (textQs.length) jobs.push(runBatches(textQs, ctx, 'text', onAnswer).then(r => { r.got.forEach((v, k) => got.set(k, v)); fatal = fatal || r.fatal; }));
+        if (imgQs.length) jobs.push((async () => {
+          const unreadable = await prepareImages(imgQs, ctx);
+          if (unreadable) warn(`${unreadable} picture(s) could not be read (the site blocks it); those questions will be shown, not filled.`);
+          const vision = await ctx.ensureVision();
+          const r = await runBatches(imgQs, ctx, vision ? 'vision' : 'text', async (q, a) => {
+            if (!vision && !a.personal) { q.imagesOk = false; }
+            await onAnswer(q, a);
+          });
+          r.got.forEach((v, k) => got.set(k, v)); fatal = fatal || r.fatal;
+        })());
+        await Promise.all(jobs);
         for (const q of toAsk) {
           if (got.has(q.id)) continue;
           const row = { ...mkRow(q), status: 'FAILED', note: fatal ? fatal.message : 'The AI returned no answer.' };
@@ -1727,21 +1933,60 @@ void (async function QuizPilot2() {
     if (!keys.length) throw new StopError('No API key. Put one in CONFIG.API_KEYS.');
     keys.forEach(k => SECRETS.push(k.replace(/^[a-z]+:/, '')));
 
-    // Work out providers WHILE the page is being scanned (saves a round trip).
-    const keysPromise = resolveKeys(keys).then(r => ({ r }), e => ({ e }));
+    // Prepare the AI (find which models work fast for this key) WHILE the page is scanned.
+    const ctx = { entries: [], cands: [], vision: [], deadKeys: new Set(), images: new Map(), announced: false, rescouted: {}, visionChecked: false };
+    async function buildPool(vision, force) {
+      const pool = [];
+      for (const entry of ctx.entries) {
+        if (ctx.deadKeys.has(entry.key)) continue;
+        if (force) { try { localStorage.removeItem(cacheKeyFor(entry, vision)); } catch (_) { /* ignore */ } }
+        let models = [];
+        try { models = await scout(entry, vision); }
+        catch (e) {
+          if (e instanceof AbortedError) throw e;
+          if (e.kind === 'auth' || e.kind === 'quota') { warn(`Key ${entry.index} was rejected or is out of credits.`); ctx.deadKeys.add(entry.key); continue; }
+          if (['network', 'blocked', 'relay'].includes(e.kind)) throw new StopError(e.message);
+          continue;
+        }
+        models.forEach(m => pool.push({ provider: entry.provider, key: entry.key, keyIndex: entry.index, model: m }));
+      }
+      if (vision) ctx.vision = pool; else ctx.cands = pool;
+      return pool.length;
+    }
+    ctx.rescout = async (kind) => {
+      if (ctx.rescouted[kind]) return false;
+      ctx.rescouted[kind] = true;
+      debug('Re-checking which AI models are available...');
+      return (await buildPool(kind === 'vision', true)) > 0;
+    };
+    ctx.ensureVision = async () => {
+      if (!ctx.visionChecked) {
+        ctx.visionChecked = true;
+        await buildPool(true, false);
+        if (!ctx.vision.length) warn('No image-capable AI is available on your key right now; picture questions will be shown, not filled.');
+      }
+      return ctx.vision.some(c => !c.dead);
+    };
+    log('Connecting to AI...');
+    const aiReady = resolveKeys(keys).then(async (r) => {
+      ctx.entries = r;
+      if (!r.length) throw new StopError('None of the API keys could be used.');
+      await buildPool(false, false);
+      if (!ctx.cands.length) throw new StopError('No working AI model was found for your key right now. Check the key on build.nvidia.com, then try again.');
+    }).then(() => ({}), e => ({ e }));
 
     await waitForReady(document, CONFIG.DOM_STABLE_TIMEOUT_MS);
     await waitForDomStable(document, CONFIG.DOM_QUIET_MS, CONFIG.DOM_STABLE_TIMEOUT_MS);
     checkAbort();
     log('Detecting questions...');
     const det = CONFIG.WATCH ? detectQuestions() : await detectWithWaiting();
-   
-    const kr = await keysPromise;
-    if (kr.e) throw kr.e;
-    if (!kr.r.length) throw new StopError('None of the API keys could be used.');
-    const ctx = { cands: [], current: 0, dead: new Set(), deadKeys: new Set(), discovered: new Set(), announced: false };
-    kr.r.forEach((entry, i) => ctx.cands.push(...candidatesFor(entry, i === 0)));
-    log(`AI: ${kr.r.map(e => `${PROVIDERS[e.provider].name} (key ${e.index})`).join(', ')} \u00B7 ${FAST ? 'fast' : 'accurate'} mode`);
+    const signals = proctoringSignals(det.docs);
+    if (signals.length) throw new StopError('This page shows signs of a proctored or locked-down assessment (' + signals.join('; ') + '). QuizPilot only runs on practice quizzes and forms, so it will not continue here.');
+    environmentReport(det.docs, det.crossOrigin).forEach(n => warn('Compatibility: ' + n));
+
+    const ai = await aiReady;
+    if (ai.e) throw ai.e;
+    log(`AI ready (${ctx.entries.map(e => PROVIDERS[e.provider].name).filter((v, i, a) => a.indexOf(v) === i).join(', ')}, ${FAST ? 'fast' : 'accurate'} mode).`);
 
     if (det.questions.length || det.skipped.length) {
       await runPass(det, ctx, true);
@@ -1753,6 +1998,83 @@ void (async function QuizPilot2() {
     else { log('Completed.'); shutdown(); }
   }
 
+  /* =========================================================================
+   * EXAM GUARD  (self-contained: copy this whole block into any project)
+   * -------------------------------------------------------------------------
+   * Decides whether a page looks like a real, monitored or graded exam.
+   * Each clue adds points; at EXAM_THRESHOLD or more the page counts as an exam.
+   *
+   *   ExamGuard.check(doc)      -> { blocked, score, reasons }   for one document
+   *   proctoringSignals(docs)   -> [] when fine, or a list of reasons to stop
+   *
+   * To make it stricter: add rules to RULES / hosts to HOSTS, or lower THRESHOLD.
+   * Rule format: { re: /words/i, pts: number, why: 'label' }  (negative pts = practice clue)
+   * ======================================================================= */
+  const ExamGuard = (() => {
+    const THRESHOLD = 6;
+
+    // Proctoring / lockdown services: loading any of these is enough on its own.
+    const HOSTS = /(proctorio|honorlock|respondus|examity|proctoru|examsoft|examplify|talview|mettl|proview|safeexambrowser|safe-exam-browser|inspera|wiseflow|autoproctor|proctortrack|verificient|meazure|proctor360|proctoredu|examus|smowl|constructor\.?proctor|testreach|eklavvya|mercer)/i;
+
+    const RULES = [
+      // strong: the page says it is proctored / locked down / monitored
+      { re: /\b(proctor(ed|ing)?|invigilat(ed|ion|or)|lockdown browser|safe exam browser|respondus|honorlock|examity|proctorio|being (monitored|recorded|proctored)|remote(ly)? proctor|ai proctor|webcam (is )?(on|recording|monitor))/i, pts: -6, why: 'proctoring / monitoring words' },
+      // the page talks about cheating rules or integrity declarations
+      { re: /\b(academic (integrity|honesty) (pledge|declaration|statement)|honou?r code|i (will|shall) not (use|consult|receive)|malpractice|unfair means|cheating (is|will be) (detected|reported)|disqualif(y|ied|ication))\b/i, pts: -3, why: 'integrity / anti-cheating notice' },
+      // monitoring of the browser itself
+      { re: /\b(enter full ?screen|full ?screen (mode )?(is )?(required|mandatory)|exit(ing)? full ?screen|allow (camera|webcam|microphone)|share your (entire )?screen|tab[- ]switch(ing|es)?|switching tabs|leave (this|the) (page|tab|window)|copy[- ]paste (is )?(disabled|not allowed)|right[- ]click (is )?disabled)\b/i, pts: -3, why: 'fullscreen / camera / tab monitoring' },
+      // graded, one-shot exam wording
+      { re: /\b(final exam|mid-?term|end[- ]?sem(ester)?|semester exam|board exam|entrance exam|graded (exam|test|quiz|assessment)|summative|one attempt only|attempts? allowed:? ?1\b|no (ai|external|outside) (help|tools|resources)|closed[- ]book)\b/i, pts: -2, why: 'graded-exam wording' },
+      // exam session details
+      { re: /\b(hall ticket|admit card|candidate (id|number)|exam (code|session|id)|roll number)\b/i, pts: -2, why: 'exam session details' },
+      // a running countdown
+      { re: /\b(time (left|remaining)|remaining time|time limit)\s*:?\s*\d{1,2}:\d{2}/i, pts: -2, why: 'countdown timer' },
+      // practice clues lower the score
+      { re: /\b(practice (quiz|test|set|questions|paper)|sample (quiz|questions|paper)|mock (test|quiz|exam)|ungraded|self[- ](check|assessment)|for practice only|not graded)\b/i, pts: -3, why: 'practice wording' },
+    ];
+
+    // Exam-style addresses (Moodle, Canvas, Blackboard, common LMS patterns)
+    const URLS = /\/(mod\/quiz\/attempt|quiz\/attempt|courses\/\d+\/quizzes\/\d+\/take|assessment\/take|exam\/(start|attempt|take)|test\/(start|attempt|take)|webapps\/assessment\/take)/i;
+
+    function check(doc) {
+      let score = 0;
+      const reasons = [];
+      const add = (pts, why) => { score += pts; reasons.push(`${pts > 0 ? '+' : ''}${pts} ${why}`); };
+      try {
+        // 1) scripts, frames (also other-site frames we cannot read), links, meta
+        const srcs = Array.from(doc.querySelectorAll('script[src], iframe[src], frame[src], link[href], object[data], embed[src]'))
+          .map(e => e.src || e.href || e.data || '').join(' ');
+        const host = srcs.match(HOSTS);
+        if (host) add(10, `proctoring service loaded (${host[0]})`);
+        // 2) title + visible text
+        const text = ((doc.title || '') + ' ' + (doc.body ? (doc.body.innerText || '') : '')).slice(0, 60000);
+        for (const r of RULES) if (r.re.test(text)) add(r.pts, r.why);
+        // 3) exam-style address
+        if (doc.location && URLS.test(doc.location.pathname || '')) add(2, 'exam-style URL');
+        // 4) lockdown environment hints
+        if (/SEB\/|SafeExamBrowser|Respondus|LockDown/i.test(navigator.userAgent)) add(10, 'lockdown browser detected');
+      } catch (_) { /* unreadable document: no points */ }
+      return { blocked: score >= THRESHOLD, score, reasons };
+    }
+
+    /** Checks every document; returns [] when fine, or the reasons to stop. */
+    function signals(docs) {
+      let total = 0;
+      const all = [];
+      for (const d of docs) {
+        const r = check(d);
+        total = Math.max(total, r.score);
+        r.reasons.forEach(x => { if (!all.includes(x)) all.push(x); });
+        if (r.blocked) return r.reasons.concat(`score ${r.score} >= ${THRESHOLD}`);
+      }
+      if (all.length) console.debug('[ExamGuard] score ' + total + ': ' + all.join(', '));
+      return [];
+    }
+
+    return { check, signals, THRESHOLD };
+  })();
+  function proctoringSignals(docs) { return ExamGuard.signals(docs); }
+  /* ======================= END OF EXAM GUARD ============================ */
 
   try {
     await main();
