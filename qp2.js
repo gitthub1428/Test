@@ -15,7 +15,7 @@
  * It never clicks Submit or Next, stops on proctored / locked-down pages, and
  * leaves personal and opinion questions for you.
  *
- * Commands:  QuizPilot.stop()   QuizPilot.rescan()   QuizPilot.lastReport
+ * Commands:  qp.stop()   qp.scan()   qp.report()   qp.clear()
  *
  * WARNING: keys in this file are readable by anyone who can open the file,
  * by the page you run it on, and by browser extensions.
@@ -88,8 +88,8 @@ void (async function QuizPilot2() {
   const W = window;
   const prev = W.__QuizPilot2;
   if (prev && prev.running) {
-    if (prev.watching && typeof prev.rescan === 'function') { log('Already running and watching - rescanning now. (QuizPilot.stop() to stop.)'); prev.rescan(); }
-    else warn('Already running in this tab. Wait for it to finish, or run QuizPilot.stop().');
+    if (prev.watching && typeof prev.rescan === 'function') { log('Already running and watching - rescanning now. (qp.stop() to stop.)'); prev.rescan(); }
+    else warn('Already running in this tab. Wait for it to finish, or run qp.stop().');
     return;
   }
   const state = {
@@ -111,7 +111,14 @@ void (async function QuizPilot2() {
     abort() { this.stop(); },
     rescan() { if (state.rescan) state.rescan(); else log('Nothing to rescan.'); },
     clearCache() { answerCache.clear(); log('Answer cache cleared.'); },
+    report() {
+      const r = this.lastReport;
+      if (!r || !r.results.length) { log('No results yet.'); return; }
+      r.results.forEach(x => console.log(`${x.id} | ${x.status} | ${x.answer || '-'} | ${x.confidence || ''} | ${truncate(x.question || '', 70)}`));
+    },
   };
+  // Short aliases:  qp.stop()  qp.scan()  qp.report()  qp.clear()
+  W.qp = { stop: () => W.QuizPilot.stop(), scan: () => W.QuizPilot.rescan(), report: () => W.QuizPilot.report(), clear: () => W.QuizPilot.clearCache() };
   function shutdown(reason) {
     state.cleanup.splice(0).forEach(fn => { try { fn(); } catch (_) { /* ignore */ } });
     if (state.watching) log('Watching stopped. ' + (reason || ''));
@@ -1709,7 +1716,7 @@ void (async function QuizPilot2() {
       clearInterval(poll); clearTimeout(limit); clearTimeout(timer); clearTimeout(maxTimer);
       W.removeEventListener('pagehide', onHide);
     });
-    log('Watching for new questions. Click Next yourself - new questions are answered as they appear. QuizPilot.stop() to stop.');
+    log('Watching for new questions. Click Next yourself - new questions are answered as they appear. qp.stop() to stop.');
     schedule(true);   // catch anything that appeared while the first pass was running
   }
 
