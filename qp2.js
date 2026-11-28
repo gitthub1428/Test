@@ -30,7 +30,7 @@ void (async function QuizPilot2() {
   const CONFIG = {
     // One or more keys from ANY supported provider. Extra keys are backups.
     // You can force a provider with a prefix, e.g. 'groq:gsk_...' or 'mistral:abc...'.
-    API_KEYS: ['PASTE_YOUR_KEY_HERE'],
+    API_KEYS: ['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'],
 
     // Your Cloudflare relay (handles CORS for every provider). '' = call providers directly.
     RELAY_URL: 'https://quizpilot-relay2.github1428.workers.dev',
