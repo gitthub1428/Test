@@ -30,10 +30,11 @@ void (async function QuizPilot2() {
   const CONFIG = {
     // One or more keys from ANY supported provider. Extra keys are backups.
     // You can force a provider with a prefix, e.g. 'groq:gsk_...' or 'mistral:abc...'.
-    API_KEYS: ['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'],
+      API_KEYS: ['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'],
 
     // Your Cloudflare relay (handles CORS for every provider). '' = call providers directly.
     RELAY_URL: 'https://quizpilot-relay2.github1428.workers.dev',
+
     MODE: 'fast',                     // 'fast' = quickest models, no explanations; 'accurate' = stronger models
     MODEL: '',                        // optional exact model id for the FIRST key, e.g. 'llama-3.3-70b-versatile'
 
@@ -321,19 +322,7 @@ void (async function QuizPilot2() {
     return { docs, crossOrigin };
   }
 
-  const PROCTOR_RE = /\b(proctor(?:ed|ing|io|u)?|lockdown browser|respondus|honorlock|examity|safe exam browser|examsoft|mettl proctor)\b/i;
-  function proctoringSignals(docs) {
-    const hits = [];
-    for (const d of docs) {
-      const scripts = Array.from(d.scripts || []).map(s => s.src || '').join(' ');
-      const m1 = scripts.match(PROCTOR_RE);
-      if (m1) hits.push('script: ' + m1[0]);
-      const txt = ((d.title || '') + ' ' + (d.body ? (d.body.innerText || '').slice(0, 30000) : ''));
-      const m2 = txt.match(PROCTOR_RE);
-      if (m2) hits.push('page text: "' + m2[0] + '"');
-    }
-    return Array.from(new Set(hits));
-  }
+  // (exam guard moved to the EXAM GUARD block near the bottom of this file)
 
   function environmentReport(docs, crossOrigin) {
     const notes = [];
@@ -1766,6 +1755,7 @@ void (async function QuizPilot2() {
     if (CONFIG.WATCH && !state.aborted) startWatching(ctx);
     else { log('Completed.'); shutdown(); }
   }
+
 
   try {
     await main();
