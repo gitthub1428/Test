@@ -32,7 +32,7 @@ void (async function QuizPilot3() {
     NVIDIA_API_KEY: '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',    // <-- put your nvapi-... key between the quotes
 
     // Your Cloudflare relay (use the v3 relay code for zero red errors).
-    RELAY_URL: 'https://quizpilot-relay2.github1428.workers.dev',
+API_BASE_URL: 'https://quizpilot-relay.github1428.workers.dev/v1',
 
     MODE: 'fast',                     // 'fast' or 'accurate' (stronger, adds explanations)
     SOLVE_IMAGES: true,               // questions/options with pictures go to an image-capable AI
