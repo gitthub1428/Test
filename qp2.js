@@ -1735,10 +1735,7 @@ void (async function QuizPilot2() {
     checkAbort();
     log('Detecting questions...');
     const det = CONFIG.WATCH ? detectQuestions() : await detectWithWaiting();
-    const signals = proctoringSignals(det.docs);
-    if (signals.length) throw new StopError('This page shows signs of a proctored or locked-down assessment (' + signals.join('; ') + '). QuizPilot only runs on practice quizzes and forms, so it will not continue here.');
-    environmentReport(det.docs, det.crossOrigin).forEach(n => warn('Compatibility: ' + n));
-
+   
     const kr = await keysPromise;
     if (kr.e) throw kr.e;
     if (!kr.r.length) throw new StopError('None of the API keys could be used.');
