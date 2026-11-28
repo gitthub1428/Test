@@ -1,5 +1,5 @@
 /*!
- * QuizPilot 3  v3.0.0  - console / bookmarklet AI assistant for practice quizzes and forms
+ * QuizPilot 3  v3.1.0  - console / bookmarklet AI assistant for practice quizzes and forms
  * ---------------------------------------------------------------------------
  * Paste your API key(s) below. The provider (NVIDIA, OpenAI, Anthropic, Gemini,
  * Groq, OpenRouter, Mistral, DeepSeek, xAI, Cerebras, Together, Fireworks,
@@ -15,7 +15,7 @@
  * It never clicks Submit or Next, stops on proctored / locked-down pages, and
  * leaves personal and opinion questions for you.
  *
- * Commands:  qp.stop()   qp.rescan()   qp.lastReport   qp.clearCache()   (QuizPilot.* also works)
+ * Commands:  qp.stop()  qp.rescan()  qp.lastReport  qp.clearCache()  qp.logs.on/off(...)
  *
  * WARNING: keys in this file are readable by anyone who can open the file,
  * by the page you run it on, and by browser extensions.
@@ -47,26 +47,74 @@ void (async function QuizPilot3() {
     FILL_TEXT_FIELDS: true,
     CACHE_ANSWERS: true,
 
-    QUESTIONS_PER_REQUEST: 5,
-    PARALLEL_REQUESTS: 4,
-    HEDGE_AFTER_MS: 9000,             // if an answer is slow, ask a backup AI in parallel
-    MAX_REQUEST_MS: 45000,
+    QUESTIONS_PER_REQUEST: 4,
+    PARALLEL_REQUESTS: 3,             // NVIDIA's free tier is rate-limited: 3 at a time is the sweet spot
+    HEDGE_AFTER_MS: 8000,             // if an answer is slow, ask a backup AI in parallel (skipped while the AI is busy)
+    MAX_REQUEST_MS: 40000,            // one request may take this long
+    BATCH_PATIENCE_MS: 120000,        // keep retrying a group of questions this long before giving up
+    SECOND_OPINION: true,             // re-ask uncertain questions with a different AI model
     MAX_TOKENS: 4096,
 
     DOM_QUIET_MS: 150,
     DOM_STABLE_TIMEOUT_MS: 4000,
     WAIT_FOR_QUESTIONS_MS: 10000,
 
-    VERBOSE: false,
+    VERBOSE: false,                   // true = also turns on the 'debug' and 'ai' logs
   };
+
+  /* =========================================================================
+   * LOGGER  (self-contained: copy this whole block into any project)
+   * -------------------------------------------------------------------------
+   * Every message QuizPilot prints goes through here. Turn each kind on/off:
+   *   - edit LOGS below, or
+   *   - in the Console:  qp.logs.off('table')   qp.logs.on('ai')
+   *                      qp.logs.off('all')     qp.logs.on('all')    qp.logs.show()
+   * Console changes are remembered on that website.
+   * ======================================================================= */
+  const LOGS = {
+    progress: true,    // "Detecting questions...", "AI ready", "Done in 3.2s"
+    results: true,     // one line per answered question (watch mode) + summary counts
+    table: true,       // the tables of questions / results
+    details: true,     // the collapsible "Detailed results" group
+    warnings: true,    // problems that were handled (key rejected, picture unreadable, ...)
+    errors: true,      // why it stopped (keep this on)
+    ai: false,         // AI activity: retries, backups, second opinions, timings
+    debug: false,      // everything else, for troubleshooting
+  };
+  const Logger = (() => {
+    const TAG = '[QuizPilot]';
+    const STYLE = 'color:#76b900;font-weight:bold';
+    const STORE = 'quizpilot3:logs';
+    try { const saved = JSON.parse(localStorage.getItem(STORE) || 'null'); if (saved && typeof saved === 'object') Object.keys(LOGS).forEach(k => { if (typeof saved[k] === 'boolean') LOGS[k] = saved[k]; }); } catch (_) { /* ignore */ }
+    let scrubber = (x) => x;
+    const fmt = (a) => a.map(x => (typeof x === 'string' ? scrubber(x) : x));
+    const enabled = (kind) => !!LOGS[kind];
+    const persist = () => { try { localStorage.setItem(STORE, JSON.stringify(LOGS)); } catch (_) { /* ignore */ } };
+    const setAll = (v, kinds) => { (kinds.length && kinds[0] !== 'all' ? kinds : Object.keys(LOGS)).forEach(k => { if (k in LOGS) LOGS[k] = v; }); persist(); };
+    return {
+      setScrubber(fn) { scrubber = fn; },
+      enabled,
+      print(kind, ...a) { if (enabled(kind)) console.log('%c' + TAG, STYLE, ...fmt(a)); },
+      warn(kind, ...a) { if (enabled(kind)) console.warn(TAG, ...fmt(a)); },
+      error(...a) { if (enabled('errors')) console.error(TAG, ...fmt(a)); },
+      table(rows) { if (enabled('table')) { try { console.table(rows); } catch (_) { /* ignore */ } } },
+      group(title, fn) { if (!enabled('details')) return; console.groupCollapsed(TAG + ' ' + scrubber(title)); try { fn(); } finally { console.groupEnd(); } },
+      controls: {
+        on(...kinds) { setAll(true, kinds); this.show(); },
+        off(...kinds) { setAll(false, kinds); this.show(); },
+        show() { console.log(TAG, 'Logs:', Object.keys(LOGS).map(k => `${k}: ${LOGS[k] ? 'on' : 'off'}`).join(' | ')); },
+        reset() { try { localStorage.removeItem(STORE); } catch (_) { /* ignore */ } console.log(TAG, 'Log settings reset; reload the script to apply defaults.'); },
+      },
+    };
+  })();
+  /* ========================= END OF LOGGER ============================== */
+
   const FAST = CONFIG.MODE !== 'accurate';
   const EXPLAIN = !FAST;
 
   /* =========================================================================
    * 2. LOGGING (keys are scrubbed from every message)
    * ======================================================================= */
-  const TAG = '[QuizPilot]';
-  const STYLE = 'color:#76b900;font-weight:bold';
   const SECRETS = [];
   const KEY_PATTERNS = /(nvapi-|sk-ant-|sk-or-|sk-proj-|sk-|gsk_|xai-|csk-|pplx-|hf_|fw_|tgp_v1_|AIza)[A-Za-z0-9_\-]{8,}/g;
   function safeStringify(v) { try { return typeof v === 'object' ? JSON.stringify(v) : String(v); } catch (_) { return String(v); } }
@@ -75,11 +123,14 @@ void (async function QuizPilot3() {
     for (const k of SECRETS) if (k && k.length > 6 && s.includes(k)) s = s.split(k).join('[REDACTED]');
     return s.replace(/Bearer\s+[A-Za-z0-9._\-]+/g, 'Bearer [REDACTED]').replace(KEY_PATTERNS, '$1[REDACTED]');
   };
-  const fmt = (a) => a.map(x => (typeof x === 'string' ? scrub(x) : x));
-  const log = (...a) => console.log('%c' + TAG, STYLE, ...fmt(a));
-  const warn = (...a) => console.warn(TAG, ...fmt(a));
-  const error = (...a) => console.error(TAG, ...fmt(a));
-  const debug = (...a) => { if (CONFIG.VERBOSE) console.debug(TAG, ...fmt(a)); };
+  Logger.setScrubber(scrub);
+  if (CONFIG.VERBOSE) { LOGS.debug = true; LOGS.ai = true; }
+  const log = (...a) => Logger.print('progress', ...a);
+  const warn = (...a) => Logger.warn('warnings', ...a);
+  const error = (...a) => Logger.error(...a);
+  const debug = (...a) => Logger.print('debug', ...a);
+  const aiLog = (...a) => Logger.print('ai', ...a);
+  const resultLog = (...a) => Logger.print('results', ...a);
 
   /* =========================================================================
    * 3. SINGLE INSTANCE + PUBLIC HANDLE
@@ -87,7 +138,7 @@ void (async function QuizPilot3() {
   const W = window;
   const prev = W.__QuizPilot3;
   if (prev && prev.running) {
-    if (prev.watching && typeof prev.rescan === 'function') { log('Already running and watching - rescanning now. (QuizPilot.stop() to stop.)'); prev.rescan(); }
+    if (prev.watching && typeof prev.rescan === 'function') { log('Already running and watching - rescanning now. (qp.stop() to stop.)'); prev.rescan(); }
     else warn('Already running in this tab. Wait for it to finish, or run QuizPilot.stop().');
     return;
   }
@@ -99,7 +150,7 @@ void (async function QuizPilot3() {
   W.__QuizPilot3 = state;
   const answerCache = (W.__QuizPilot3Cache instanceof Map) ? W.__QuizPilot3Cache : (W.__QuizPilot3Cache = new Map());
   W.QuizPilot = {
-    version: '3.0.0',
+    version: '3.1.0',
     lastReport: null,
     stop() {
       if (!state.running) { log('Not running.'); return; }
@@ -109,7 +160,8 @@ void (async function QuizPilot3() {
     },
     abort() { this.stop(); },
     rescan() { if (state.rescan) state.rescan(); else log('Nothing to rescan.'); },
-    clearCache() { answerCache.clear(); try { Object.keys(localStorage).filter(k => k.startsWith('quizpilot3:')).forEach(k => localStorage.removeItem(k)); } catch (_) { /* ignore */ } log('Answer and AI caches cleared.'); },
+    clearCache() { answerCache.clear(); try { Object.keys(localStorage).filter(k => k.startsWith('quizpilot3:') && k !== 'quizpilot3:logs').forEach(k => localStorage.removeItem(k)); } catch (_) { /* ignore */ } log('Answer and AI caches cleared.'); },
+    logs: Logger.controls,
   };
   W.qp = W.QuizPilot;
   function shutdown(reason) {
@@ -1068,7 +1120,7 @@ void (async function QuizPilot3() {
       catch (e) { if (e instanceof AbortedError) throw e; if (['auth', 'quota', 'network', 'blocked', 'relay'].includes(e.kind)) throw e; ids = null; }
     }
     const ranked = rankModels(entry.provider, (ids && ids.length ? ids : (FAST ? p.fast : p.accurate)).concat(ids ? [] : []), vision);
-    const pool = ranked.slice(0, vision ? 5 : 8);
+    const pool = ranked.slice(0, vision ? 4 : 6);
     if (!pool.length) return [];
     // Finish early: once 2 models passed, give the rest only a short grace period.
     const results = await new Promise((resolve, reject) => {
@@ -1082,7 +1134,7 @@ void (async function QuizPilot3() {
       }, e => { if (!done) { done = true; clearTimeout(grace); reject(e); } }));
     });
     const working = results.filter(r => r.ms !== null)
-      .map(r => ({ m: r.m, score: r.ms - Math.min(sizeOf(r.m) || 30, 120) * (FAST ? 25 : 60) + pool.indexOf(r.m) * 150 }))
+      .map(r => ({ m: r.m, score: r.ms - Math.min(sizeOf(r.m) || 30, 120) * (FAST ? 40 : 70) + pool.indexOf(r.m) * 150 }))
       .sort((a, b) => a.score - b.score).map(r => r.m);
     debug(`Scout (${vision ? 'vision' : 'text'}): ${working.length}/${pool.length} usable`);
     if (working.length) saveScout(entry, vision, working);
@@ -1319,66 +1371,100 @@ void (async function QuizPilot3() {
     if (i > 0) { pool.splice(i, 1); pool.unshift(cand); }
   }
 
+  function makeSemaphore(n) {
+    let active = 0;
+    const waiting = [];
+    return {
+      async acquire() { if (active < n) { active++; return; } await new Promise(r => waiting.push(r)); active++; },
+      release() { active--; const next = waiting.shift(); if (next) next(); },
+    };
+  }
+  const aliasOf = (ctx, cand) => { if (!ctx.aliases) ctx.aliases = new Map(); if (!ctx.aliases.has(cand)) ctx.aliases.set(cand, 'AI #' + (ctx.aliases.size + 1)); return ctx.aliases.get(cand); };
+  const rangeOf = (b) => (b.length === 1 ? b[0].id : `${b[0].id}-${b[b.length - 1].id}`);
+
   /**
-   * Answers one batch. Uses the best model; if it is slow, a second model is asked
-   * in parallel (HEDGE_AFTER_MS) and whichever answers first wins.
+   * Answers one group of questions. Never gives up quickly: keeps trying working
+   * models with pauses for up to BATCH_PATIENCE_MS. If an answer is slow, a backup
+   * model is asked in parallel (not while the AI says it is busy).
    */
-  async function answerBatch(batch, ctx, kind) {
+  async function answerBatch(batch, ctx, kind, opts) {
+    opts = opts || {};
+    if (!ctx.sem) ctx.sem = makeSemaphore(Math.max(1, CONFIG.PARALLEL_REQUESTS) + 1);
+    const started = Date.now();
+    const patience = opts.patienceMs || CONFIG.BATCH_PATIENCE_MS;
     const imagesFor = (b) => (kind === 'vision' ? b.flatMap(q => ctx.images.get(q.id) || []) : []);
-    for (let round = 0; round < 4; round++) {
+    let attempt = 0;
+    while (Date.now() - started < patience) {
       checkAbort();
       const pool = kind === 'vision' ? ctx.vision : ctx.cands;
       const now = Date.now();
-      const usable = pool.filter(c => !c.dead && !ctx.deadKeys.has(c.key) && !(c.coolUntil > now));
+      let usable = pool.filter(c => !c.dead && !ctx.deadKeys.has(c.key) && !(c.coolUntil > now));
+      if (opts.avoid) { const alt = usable.filter(c => c !== opts.avoid); if (alt.length) usable = alt; }
       if (!usable.length) {
-        const cooling = pool.filter(c => !c.dead && !ctx.deadKeys.has(c.key));
-        if (cooling.length) { await sleep(Math.min(8000, Math.max(800, Math.min(...cooling.map(c => (c.coolUntil || 0) - now))))); continue; }
+        const alive = pool.filter(c => !c.dead && !ctx.deadKeys.has(c.key));
+        if (alive.length) {
+          const wait = clamp(Math.min(...alive.map(c => (c.coolUntil || 0) - now)), 600, 10000);
+          aiLog(`${rangeOf(batch)}: AI is busy, waiting ${(wait / 1000).toFixed(1)}s...`);
+          await sleep(wait);
+          continue;
+        }
         if (await ctx.rescout(kind)) continue;
         break;
       }
+      attempt++;
       const images = imagesFor(batch);
-      const [primary, backup] = usable;
+      const [primary, backupCand] = usable;
+      const canHedge = !!backupCand && !(ctx.busyUntil > now);
       const ac1 = new AbortController(), ac2 = new AbortController();
-      const run = (cand, ac) => answerWithCandidate(cand, batch, ac.signal, images).then(v => ({ ok: true, v, cand }), e => ({ ok: false, e, cand }));
+      const run = async (cand, ac) => {
+        await ctx.sem.acquire();
+        const t0 = performance.now();
+        try {
+          if (ac.signal.aborted) return { ok: false, e: new ApiError('cancelled', 'cancelled'), cand };
+          const v = await answerWithCandidate(cand, batch, ac.signal, images);
+          return { ok: true, v, cand, ms: performance.now() - t0 };
+        } catch (e) { return { ok: false, e, cand, ms: performance.now() - t0 }; }
+        finally { ctx.sem.release(); }
+      };
+      aiLog(`${rangeOf(batch)}: asking ${aliasOf(ctx, primary)}${attempt > 1 ? ` (try ${attempt})` : ''}`);
       const p1 = run(primary, ac1);
       let hedgeTimer = null;
-      const hedge = backup ? new Promise(res => { hedgeTimer = setTimeout(() => res('hedge'), CONFIG.HEDGE_AFTER_MS); }) : new Promise(() => {});
+      const hedge = canHedge ? new Promise(res => { hedgeTimer = setTimeout(() => res('hedge'), CONFIG.HEDGE_AFTER_MS); }) : new Promise(() => {});
       let first = await Promise.race([p1, hedge]);
-      let pending = [];
-      if (first === 'hedge') {
-        debug('First answer is slow; asking a backup in parallel.');
-        const p2 = run(backup, ac2);
-        first = await Promise.race([p1, p2]);
-        pending = [first.cand === primary ? p2 : p1];
-        if (!first.ok) {
-          const other = await pending[0];
-          pending = [];
-          const s = noteFailure(ctx, first.cand, first.e, batch.length);
-          if (other.ok) { first = other; } else {
-            const s2 = noteFailure(ctx, other.cand, other.e, batch.length);
-            if ((s === 'split' || s2 === 'split') && batch.length > 1) return splitAndAnswer(batch, ctx, kind);
-            continue;
-          }
-        }
-      }
       clearTimeout(hedgeTimer);
+      const failures = [];
+      if (first === 'hedge') {
+        aiLog(`${rangeOf(batch)}: slow reply, also asking ${aliasOf(ctx, backupCand)}`);
+        const p2 = run(backupCand, ac2);
+        first = await Promise.race([p1, p2]);
+        if (!first.ok) { failures.push(first); first = await (first.cand === primary ? p2 : p1); }
+      }
       if (first.ok) {
-        (first.cand === primary ? ac2 : ac1).abort();
-        pending.forEach(p => p.then(() => {}, () => {}));
+        ac1.abort(); ac2.abort();
         promote(pool, first.cand);
         if (!ctx.announced) { ctx.announced = true; log('AI connected.'); }
+        aiLog(`${rangeOf(batch)}: answered by ${aliasOf(ctx, first.cand)} in ${(first.ms / 1000).toFixed(1)}s`);
+        first.v.cand = first.cand;
         return first.v;
       }
-      const s = noteFailure(ctx, first.cand, first.e, batch.length);
-      if (s === 'split' && batch.length > 1) return splitAndAnswer(batch, ctx, kind);
+      failures.push(first);
+      let split = false;
+      for (const f of failures) {
+        if (f.e && f.e.kind === 'cancelled') continue;
+        aiLog(`${rangeOf(batch)}: ${aliasOf(ctx, f.cand)} failed (${f.e && f.e.kind}: ${truncate(String(f.e && f.e.message), 90)})`);
+        if (f.e && f.e.kind === 'rate') ctx.busyUntil = Date.now() + Math.max(4000, Math.min(f.e.retryAfterMs || 0, 20000));
+        if (noteFailure(ctx, f.cand, f.e, batch.length) === 'split') split = true;
+      }
+      if (split && batch.length > 1) return splitAndAnswer(batch, ctx, kind, opts);
+      await sleep(Math.min(400 * attempt, 3000));
     }
-    throw new StopError(kind === 'vision' ? 'No image-capable AI model is available right now.' : 'The AI service is not responding right now. Try again in a minute.');
+    throw new StopError(kind === 'vision' ? 'No image-capable AI answered in time.' : 'The AI did not answer in time (NVIDIA may be overloaded). Try again in a minute, or add a second key.');
   }
 
-  async function splitAndAnswer(batch, ctx, kind) {
+  async function splitAndAnswer(batch, ctx, kind, opts) {
     const mid = Math.ceil(batch.length / 2);
-    debug(`Splitting a batch of ${batch.length}.`);
-    const [a, b] = await Promise.all([answerBatch(batch.slice(0, mid), ctx, kind), answerBatch(batch.slice(mid), ctx, kind)]);
+    aiLog(`${rangeOf(batch)}: splitting into smaller groups`);
+    const [a, b] = await Promise.all([answerBatch(batch.slice(0, mid), ctx, kind, opts), answerBatch(batch.slice(mid), ctx, kind, opts)]);
     b.result.forEach((val, k) => a.result.set(k, val));
     return { result: a.result, problems: [], missing: [], valid: true };
   }
@@ -1390,7 +1476,7 @@ void (async function QuizPilot3() {
     for (let i = 0; i < questions.length; i += size) queue.push(questions.slice(i, i + size));
     const got = new Map();
     let fatal = null;
-    const deliver = async (list, v) => { for (const q of list) if (v.result.has(q.id) && !got.has(q.id)) { got.set(q.id, v.result.get(q.id)); await onAnswer(q, v.result.get(q.id)); } };
+    const deliver = async (list, v) => { for (const q of list) if (v.result.has(q.id) && !got.has(q.id)) { got.set(q.id, v.result.get(q.id)); if (v.cand) ctx.answeredBy.set(q.id, v.cand); await onAnswer(q, v.result.get(q.id)); } };
     const worker = async () => {
       while (queue.length && !state.aborted) {
         const batch = queue.shift();
@@ -1685,29 +1771,29 @@ void (async function QuizPilot3() {
 
   function printFullReport(rows, extra) {
     const count = (s) => rows.filter(r => r.status === s).length;
-    console.groupCollapsed(`${TAG} Detailed results (${rows.length})`);
-    for (const r of rows) {
-      console.groupCollapsed(`${r.id} [${r.status}] ${truncate(r.question, 90)}`);
-      if (r.options && r.options.length) console.log('Options:', r.options.map(o => `${o.id}) ${o.text}`).join('  |  '));
-      if (r.answer) console.log('Answer:', r.answer);
-      if (r.confidence !== '') console.log('Confidence:', r.confidence);
-      if (r.explanation) console.log('Explanation:', r.explanation);
-      if (r.note) console.log('Note:', r.note);
-      console.groupEnd();
-    }
-    console.groupEnd();
-    try { console.table(rows.map(r => ({ id: r.id, status: r.status, answer: truncate(r.answer || '', 60), confidence: r.confidence, question: truncate(r.question, 70), note: truncate(r.note || '', 70) }))); } catch (_) { /* ignore */ }
-    log('Verified: ' + count('VERIFIED') + (count('ALREADY SET') ? ` (+${count('ALREADY SET')} already correct)` : ''));
-    if (count('SUGGESTED')) log('Suggested (auto-fill off): ' + count('SUGGESTED'));
-    log('Uncertain: ' + count('UNCERTAIN'));
-    log('Failed: ' + count('FAILED'));
+    Logger.group(`Detailed results (${rows.length})`, () => {
+      for (const r of rows) {
+        console.groupCollapsed(`${r.id} [${r.status}] ${truncate(r.question, 90)}`);
+        if (r.options && r.options.length) console.log('Options:', r.options.map(o => `${o.id}) ${o.text}`).join('  |  '));
+        if (r.answer) console.log('Answer:', r.answer);
+        if (r.confidence !== '') console.log('Confidence:', r.confidence);
+        if (r.explanation) console.log('Explanation:', r.explanation);
+        if (r.note) console.log('Note:', r.note);
+        console.groupEnd();
+      }
+    });
+    Logger.table(rows.map(r => ({ id: r.id, status: r.status, answer: truncate(r.answer || '', 60), confidence: r.confidence, question: truncate(r.question, 70), note: truncate(r.note || '', 70) })));
+    resultLog('Verified: ' + count('VERIFIED') + (count('ALREADY SET') ? ` (+${count('ALREADY SET')} already correct)` : ''));
+    if (count('SUGGESTED')) resultLog('Suggested (auto-fill off): ' + count('SUGGESTED'));
+    resultLog('Uncertain: ' + count('UNCERTAIN'));
+    resultLog('Failed: ' + count('FAILED'));
     const yours = count('YOURS') + count('ANSWERED BY YOU') + count('SKIPPED');
-    if (yours) log('Left for you / skipped: ' + yours);
+    if (yours) resultLog('Left for you / skipped: ' + yours);
     if (extra) log(extra);
   }
   function printLine(r) {
     const line = `${ICON[r.status] || ''} ${r.id} ${r.status}${r.answer ? '  ' + r.answer : ''}${r.confidence !== '' ? '  (' + r.confidence + ')' : ''}  \u00B7 ${truncate(r.question, 70)}${r.note && r.status !== 'VERIFIED' ? '  \u2014 ' + truncate(r.note, 90) : ''}`;
-    if (r.status === 'FAILED') warn(line); else log(line);
+    if (r.status === 'FAILED') Logger.warn('results', line); else resultLog(line);
   }
   function publishReport() {
     W.QuizPilot.lastReport = { at: new Date().toISOString(), url: location.href, results: state.rows.map(r => ({ ...r, options: (r.options || []).map(o => ({ id: o.id, text: o.text })) })) };
@@ -1761,7 +1847,7 @@ void (async function QuizPilot3() {
     fresh.forEach(q => { q.id = 'q' + (++state.counter); });
     if (first) {
       log(`Found ${fresh.length} question${fresh.length === 1 ? '' : 's'}.` + (freshSkipped.length ? ` (${freshSkipped.length} personal/unsupported field(s) left for you)` : ''));
-      try { console.table(fresh.map(q => ({ id: q.id, type: q.type, options: q.options.length || '', question: truncate(q.text, 90) }))); } catch (_) { /* ignore */ }
+      Logger.table(fresh.map(q => ({ id: q.id, type: q.type, options: q.options.length || '', question: truncate(q.text, 90) })));
     } else log(`New question${fresh.length === 1 ? '' : 's'} detected: ${fresh.map(q => q.id).join(', ')}`);
 
     const rows = new Map();
@@ -1816,6 +1902,34 @@ void (async function QuizPilot3() {
           r.got.forEach((v, k) => got.set(k, v)); fatal = fatal || r.fatal;
         })());
         await Promise.all(jobs);
+
+        // Second opinion: re-ask uncertain questions with a DIFFERENT model; fill if it is confident.
+        if (CONFIG.SECOND_OPINION && !state.aborted) {
+          const unsure = textQs.filter(q => { const r = rows.get(q.id); const a = got.get(q.id); return r && a && r.status === 'UNCERTAIN' && !a.personal; });
+          if (unsure.length && ctx.cands.filter(c => !c.dead && !ctx.deadKeys.has(c.key)).length > 1) {
+            aiLog(`Second opinion for ${unsure.length} uncertain question(s)...`);
+            const size = Math.max(1, CONFIG.QUESTIONS_PER_REQUEST);
+            const groups = [];
+            for (let i = 0; i < unsure.length; i += size) groups.push(unsure.slice(i, i + size));
+            await Promise.all(groups.map(async (grp) => {
+              try {
+                const v = await answerBatch(grp, ctx, 'text', { avoid: ctx.answeredBy.get(grp[0].id), patienceMs: 60000 });
+                for (const q of grp) {
+                  const a2 = v.result.get(q.id);
+                  if (!a2 || a2.personal || decide(q, a2).action !== 'fill') continue;
+                  const row = rows.get(q.id);
+                  Object.assign(row, mkRow(q, a2), { status: '', note: '' });
+                  await fillOne(q, a2, row, det);
+                  if (row.status === 'VERIFIED') { row.note = 'Second opinion.'; if (CONFIG.CACHE_ANSWERS) answerCache.set(q.cacheKey, a2); }
+                  done(row);
+                }
+              } catch (e) {
+                if (e instanceof AbortedError) throw e;
+                aiLog('Second opinion skipped: ' + e.message);
+              }
+            }));
+          }
+        }
         for (const q of toAsk) {
           if (got.has(q.id)) continue;
           const row = { ...mkRow(q), status: 'FAILED', note: fatal ? fatal.message : 'The AI returned no answer.' };
@@ -1934,7 +2048,7 @@ void (async function QuizPilot3() {
     keys.forEach(k => SECRETS.push(k.replace(/^[a-z]+:/, '')));
 
     // Prepare the AI (find which models work fast for this key) WHILE the page is scanned.
-    const ctx = { entries: [], cands: [], vision: [], deadKeys: new Set(), images: new Map(), announced: false, rescouted: {}, visionChecked: false };
+    const ctx = { entries: [], cands: [], vision: [], deadKeys: new Set(), images: new Map(), answeredBy: new Map(), announced: false, rescouted: {}, visionChecked: false };
     async function buildPool(vision, force) {
       const pool = [];
       for (const entry of ctx.entries) {
@@ -2032,6 +2146,7 @@ void (async function QuizPilot3() {
       // practice clues lower the score
       { re: /\b(practice (quiz|test|set|questions|paper)|sample (quiz|questions|paper)|mock (test|quiz|exam)|ungraded|self[- ](check|assessment)|for practice only|not graded)\b/i, pts: -3, why: 'practice wording' },
     ];
+
 
     // Exam-style addresses (Moodle, Canvas, Blackboard, common LMS patterns)
     const URLS = /\/(mod\/quiz\/attempt|quiz\/attempt|courses\/\d+\/quizzes\/\d+\/take|assessment\/take|exam\/(start|attempt|take)|test\/(start|attempt|take)|webapps\/assessment\/take)/i;
