@@ -29,7 +29,7 @@ void (async function QuizPilot3() {
    * ======================================================================= */
   const CONFIG = {
     // Your NVIDIA key (nvapi-...). Other services' keys also work; extra keys are backups.
-    API_KEYS: ['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'],
+    API_KEYS: ['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'],
 
     // Your Cloudflare relay (use the v3 relay code for zero red errors).
     RELAY_URL: 'https://quizpilot-relay2.github1428.workers.dev',
